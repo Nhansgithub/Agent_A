@@ -178,7 +178,9 @@ async def test_create_issue_refuses_a_plain_string_description() -> None:
     adapter, _ = build()
     with pytest.raises(AgentError, match="not an ADF document"):
         await adapter.create_issue(
-            project_key="MAIN", summary="x", description="plain"  # type: ignore[arg-type]
+            project_key="MAIN",
+            summary="x",
+            description="plain",  # type: ignore[arg-type]
         )
 
 

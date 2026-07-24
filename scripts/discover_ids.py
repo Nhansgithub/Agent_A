@@ -116,14 +116,16 @@ def main() -> int:
     if not spaces:
         print("  (none found — is Confluence enabled on this site?)")
     for space in spaces:
-        print(f"  key={space.get('key', '?'):<12} id={space.get('id', '?'):<12} {space.get('name', '')}")
+        print(
+            f"  key={space.get('key', '?'):<12} id={space.get('id', '?'):<12} {space.get('name', '')}"
+        )
 
     section("Confluence folders  →  confluence_source / draft / published _folder_id")
     found_any = False
     for space in spaces:
-        folders = (get(client, f"/wiki/api/v2/spaces/{space.get('id')}/folders", limit=100) or {}).get(
-            "results", []
-        )
+        folders = (
+            get(client, f"/wiki/api/v2/spaces/{space.get('id')}/folders", limit=100) or {}
+        ).get("results", [])
         if not folders:
             continue
         found_any = True

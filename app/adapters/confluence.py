@@ -1,0 +1,288 @@
+"""`ConfluenceAdapter` — every Confluence call in the system goes through here (AD-7, AD-14).
+
+Defaults to Confluence Cloud REST **v2**, with two deliberate exceptions the architecture already
+paid for in research. Do not "simplify" these back to v2:
+
+1. **Placing a page into a folder uses the v1 move endpoint**
+   `PUT /wiki/rest/api/content/{id}/move/append/{folderId}`. Setting a folder as `parentId` on the
+   v2 create/update endpoint returns **500** (AD-14). This is why `create_page` and `move_page` are
+   separate steps rather than one call.
+2. **Content restrictions are v1-only Cloud endpoints** (`/wiki/rest/api/content/{id}/restriction/*`).
+
+The third trap is in :meth:`set_edit_restriction`: an edit restriction that omits the agent's own
+account **locks the agent out of the page it just published**, and a later re-apply then fails. The
+method takes the agent account explicitly and refuses to proceed without it (AD-18).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from app.adapters.http import AtlassianClient
+from app.adapters.markdown import storage_to_markdown
+from app.config.constants import AGENT_GENERATED_LABEL, PRD_CORRELATION_PROPERTY
+from app.domain.atlassian import ConfluencePage
+from app.domain.errors import AgentError
+
+V2 = "/wiki/api/v2"
+V1 = "/wiki/rest/api"
+
+
+class ConfluenceAdapter:
+    """Domain-verb access to one tenant's Confluence."""
+
+    __slots__ = ("_client",)
+
+    def __init__(self, client: AtlassianClient) -> None:
+        self._client = client
+
+    # -- identity ----------------------------------------------------------------------------
+
+    async def get_current_user(self) -> str:
+        """The agent's own accountId (AD-10). Same account as Jira within one Atlassian org."""
+        body = await self._client.request("GET", f"{V1}/user/current", operation="get_current_user")
+        return str((body or {}).get("accountId", ""))
+
+    # -- reads -------------------------------------------------------------------------------
+
+    async def get_page(self, page_id: str, *, with_body: bool = True) -> ConfluencePage:
+        params: dict[str, Any] = {"include-labels": "true", "include-version": "true"}
+        if with_body:
+            params["body-format"] = "storage"
+        body = await self._client.request(
+            "GET",
+            f"{V2}/pages/{page_id}",
+            operation="get_page",
+            params=params,
+            context={"page": page_id},
+        )
+        return self._to_page(body or {})
+
+    async def get_page_ancestors(self, page_id: str) -> tuple[str, ...]:
+        """Ancestor ids, nearest first — used by the FR-01 watched-folder check (AD-14).
+
+        The `page-created` webhook payload does not reliably carry the page's container, so detection
+        falls back to this rather than guessing.
+        """
+        body = await self._client.request(
+            "GET",
+            f"{V2}/pages/{page_id}/ancestors",
+            operation="get_page_ancestors",
+            context={"page": page_id},
+        )
+        return tuple(
+            str(item.get("id")) for item in (body or {}).get("results", []) if item.get("id")
+        )
+
+    async def get_folder(self, folder_id: str) -> dict[str, Any]:
+        """AD-14 — folders are first-class and addressable by id in v2."""
+        return (
+            await self._client.request(
+                "GET",
+                f"{V2}/folders/{folder_id}",
+                operation="get_folder",
+                context={"folder": folder_id},
+            )
+            or {}
+        )
+
+    async def get_labels(self, page_id: str) -> tuple[str, ...]:
+        """AD-10 defense-in-depth — a page carrying `agent-generated` never enters detection."""
+        body = await self._client.request(
+            "GET",
+            f"{V2}/pages/{page_id}/labels",
+            operation="get_labels",
+            context={"page": page_id},
+        )
+        return tuple(
+            str(item.get("name")) for item in (body or {}).get("results", []) if item.get("name")
+        )
+
+    async def find_page_by_prd_marker(self, folder_id: str, prd_id: str) -> ConfluencePage | None:
+        """Find a draft page this run already created, by its AD-11 correlation property.
+
+        Confluence page-create and set-content-property are two calls, so unlike Jira the marker is
+        **not** atomic with the create (the open item flagged in the architecture memlog). This
+        searches the draft folder's children and checks each page's content property, which covers
+        the crash window in practice: the orphan is in the draft folder either way.
+        """
+        body = await self._client.request(
+            "GET",
+            f"{V2}/folders/{folder_id}/children",
+            operation="find_page_by_prd_marker",
+            params={"limit": 100},
+            context={"folder": folder_id},
+        )
+        for child in (body or {}).get("results", []):
+            page_id = str(child.get("id", ""))
+            if not page_id:
+                continue
+            if await self.get_content_property(page_id, PRD_CORRELATION_PROPERTY) == prd_id:
+                return await self.get_page(page_id)
+        return None
+
+    async def get_content_property(self, page_id: str, key: str) -> str | None:
+        body = await self._client.request(
+            "GET",
+            f"{V2}/pages/{page_id}/properties",
+            operation="get_content_property",
+            params={"key": key},
+            context={"page": page_id, "key": key},
+        )
+        for item in (body or {}).get("results", []):
+            if item.get("key") == key:
+                return str(item.get("value"))
+        return None
+
+    # -- writes ------------------------------------------------------------------------------
+
+    async def create_page(
+        self,
+        *,
+        space_id: str,
+        title: str,
+        body_storage: str,
+        parent_id: str | None = None,
+    ) -> ConfluencePage:
+        """Create a page.
+
+        `parent_id` may only be another **page**. To place a page in a *folder*, create it and then
+        call :meth:`move_page` — passing a folder id as `parentId` here returns 500 (AD-14).
+        """
+        payload: dict[str, Any] = {
+            "spaceId": space_id,
+            "status": "current",
+            "title": title,
+            "body": {"representation": "storage", "value": body_storage},
+        }
+        if parent_id:
+            payload["parentId"] = parent_id
+
+        body = await self._client.request(
+            "POST",
+            f"{V2}/pages",
+            operation="create_page",
+            json=payload,
+            context={"space": space_id, "title": title[:80]},
+        )
+        return self._to_page(body or {})
+
+    async def update_page(
+        self, *, page_id: str, title: str, body_storage: str, version: int
+    ) -> ConfluencePage:
+        """Update a page. Confluence requires the *next* version number for optimistic locking."""
+        body = await self._client.request(
+            "PUT",
+            f"{V2}/pages/{page_id}",
+            operation="update_page",
+            json={
+                "id": page_id,
+                "status": "current",
+                "title": title,
+                "body": {"representation": "storage", "value": body_storage},
+                "version": {"number": version + 1, "message": "Revised by the UserDoc agent"},
+            },
+            context={"page": page_id, "version": str(version)},
+        )
+        return self._to_page(body or {})
+
+    async def move_page(self, page_id: str, folder_id: str) -> None:
+        """Place a page into a folder via the **v1** move endpoint (AD-14).
+
+        The v2 `parentId` path 500s for folder parents. Used both to put the first draft in the
+        draft folder (FR-06) and to move the approved doc to the published folder (FR-15 step 2).
+        """
+        await self._client.request(
+            "PUT",
+            f"{V1}/content/{page_id}/move/append/{folder_id}",
+            operation="move_page",
+            context={"page": page_id, "folder": folder_id},
+        )
+
+    async def add_label(self, page_id: str, label: str) -> None:
+        await self._client.request(
+            "POST",
+            f"{V1}/content/{page_id}/label",
+            operation="add_label",
+            json=[{"prefix": "global", "name": label}],
+            context={"page": page_id, "label": label},
+        )
+
+    async def stamp_agent_generated(self, page_id: str) -> None:
+        """AD-10 — the Publisher stamps this on every page it creates, so detection can exclude it."""
+        await self.add_label(page_id, AGENT_GENERATED_LABEL)
+
+    async def set_content_property(self, page_id: str, key: str, value: str) -> None:
+        """Stamp the AD-11 correlation marker so a resume can adopt an orphan page."""
+        await self._client.request(
+            "POST",
+            f"{V2}/pages/{page_id}/properties",
+            operation="set_content_property",
+            json={"key": key, "value": value},
+            context={"page": page_id, "key": key},
+            expected=(200, 201, 400, 409),  # 400/409 = already set; the marker is immutable
+        )
+
+    async def set_edit_restriction(self, page_id: str, *, allowed_account_ids: list[str]) -> None:
+        """Restrict **who may edit** the page (FR-15 step 1, AD-18).
+
+        This is an access restriction, **not** a content freeze and **not** version pinning:
+        Confluence keeps versioning the page normally, and space admins retain access.
+
+        `allowed_account_ids` **must include the agent's own account** (the one resolved once per
+        tenant per AD-10). Omitting it locks the agent out of the page it just published — the API
+        rejects the call, and a resume that re-applies the restriction would fail too.
+        """
+        if not allowed_account_ids:
+            raise AgentError(
+                message="Refusing to apply an edit restriction with an empty allow-list.",
+                suggested_fix=(
+                    "Include the agent's own accountId (resolved via get_current_user) and any "
+                    "space admins. An empty list would lock the agent out of its own page (AD-18)."
+                ),
+                operation="confluence.set_edit_restriction",
+                context={"page": page_id},
+            )
+
+        await self._client.request(
+            "PUT",
+            f"{V1}/content/{page_id}/restriction",
+            operation="set_edit_restriction",
+            json=[
+                {
+                    "operation": "update",
+                    "restrictions": {
+                        "user": [
+                            {"type": "known", "accountId": account_id}
+                            for account_id in allowed_account_ids
+                        ]
+                    },
+                }
+            ],
+            context={"page": page_id, "allowed": str(len(allowed_account_ids))},
+        )
+
+    # -- conversion --------------------------------------------------------------------------
+
+    @staticmethod
+    def storage_to_markdown(storage_html: str) -> str:
+        """Confluence storage format → Markdown for the FR-15 `.md` export."""
+        return storage_to_markdown(storage_html)
+
+    # -- internals ---------------------------------------------------------------------------
+
+    @staticmethod
+    def _to_page(body: dict[str, Any]) -> ConfluencePage:
+        version = body.get("version") or {}
+        page_body = (body.get("body") or {}).get("storage") or {}
+        labels = (body.get("labels") or {}).get("results") or []
+        return ConfluencePage(
+            id=str(body.get("id", "")),
+            title=str(body.get("title") or ""),
+            version=int(version.get("number") or 1),
+            space_id=str(body.get("spaceId")) if body.get("spaceId") else None,
+            parent_id=str(body.get("parentId")) if body.get("parentId") else None,
+            body_storage=str(page_body.get("value") or ""),
+            labels=tuple(str(item.get("name")) for item in labels if item.get("name")),
+            author_account_id=body.get("authorId") or (version.get("authorId")),
+        )

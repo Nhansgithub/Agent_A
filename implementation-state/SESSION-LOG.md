@@ -183,3 +183,46 @@ so an injected or pooled client cannot silently lose authentication.
 **Suite: 192 passed.** 32 new adapter tests, all against a fake transport — no network, no credentials.
 
 **Next:** Story 1.8 — `ConfluenceAdapter` + markdown converter (v2 default, v1 for move/restrictions).
+
+---
+
+## 2026-07-24 · Session 1 (cont.) — Setup guide + Story 1.8
+
+### Setup guide (requested by Nhan, mid-run)
+Nhan has the Atlassian account, both Jira projects and all three Confluence folders, plus an
+Anthropic key — but no API token, no webhook secret, and no LangSmith account, and asked for
+step-by-step instructions written for someone who has not connected a third-party API before.
+
+- **`SETUP-GUIDE.md`** (root): 8 parts, checklist-driven. Covers creating the Atlassian API token,
+  collecting every ID, placing the Anthropic key, *generating* the webhook secret (Nhan did not know
+  this is self-invented rather than fetched), LangSmith signup, filling `.env` + `registry.yaml`,
+  registering webhooks, and the DigitalOcean steps. Plus a troubleshooting table keyed by symptom and
+  a per-secret blast-radius table.
+- **`scripts/discover_ids.py`**: prints Jira project keys, Confluence space/folder ids, and account
+  ids in one command. Finding folder ids by hand is the fiddliest part of setup and a wrong one
+  surfaces much later as a confusing 404.
+- **`scripts/verify_setup.py`**: read-only end-to-end config check. Notably catches the
+  **published-folder-nested-inside-source** case — the config loader can only see the exact-match
+  case, not the folder *tree*, and nesting would make the agent re-ingest its own output forever.
+
+Both scripts smoke-tested for clean, actionable failure output with no credentials present.
+
+`git init` + two commits (Nhan approved). Nothing pushed to a remote.
+
+### S1.8 — `ConfluenceAdapter` + markdown converter · **DONE**
+- `app/adapters/confluence.py`: v2 by default, with the two v1 exceptions the architecture already
+  researched — folder placement via `PUT /wiki/rest/api/content/{id}/move/append/{folderId}` (the v2
+  `parentId` path 500s for folder parents, AD-14) and content restrictions (v1-only Cloud endpoints).
+  `set_edit_restriction` **refuses an empty allow-list before making any HTTP call**, because omitting
+  the agent's own account locks it out of the page it just published (AD-18).
+- `app/adapters/markdown.py`: storage→Markdown. Rather than subclassing markdownify's converter and
+  overriding `convert_ac:structured-macro`, a BeautifulSoup pass normalizes Atlassian `ac:`/`ri:` tags
+  into plain HTML first — that dispatch naming has changed between markdownify releases, and a
+  normalization pass is stable across upgrades and independently testable. Unknown macros keep their
+  prose: losing a macro's *rendering* is acceptable (§13 Q5), losing the words inside it is not.
+- Tests assert **no `ac:` or `ri:` tag survives conversion** — a leaked namespace tag in the exported
+  `.md` would be visible to end users on the published help site.
+
+**Suite: 227 passed. ruff clean. 5/5 import-linter contracts kept.**
+
+**Next:** Story 1.9 — in-invocation LangGraph orchestrator, stage machine, and serial queue.

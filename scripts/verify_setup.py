@@ -35,7 +35,12 @@ from app.config.secrets import (  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
-PASS, FAIL, WARN, SKIP = "\033[32m PASS \033[0m", "\033[31m FAIL \033[0m", "\033[33m WARN \033[0m", " SKIP "
+PASS, FAIL, WARN, SKIP = (
+    "\033[32m PASS \033[0m",
+    "\033[31m FAIL \033[0m",
+    "\033[33m WARN \033[0m",
+    " SKIP ",
+)
 
 _results: list[tuple[str, str]] = []
 
@@ -141,7 +146,9 @@ def check_atlassian(tenant: TenantConfig, env: dict[str, str]) -> None:
         for label, folder_id in folders.items():
             result = client.get(f"/wiki/api/v2/folders/{folder_id}")
             if result.status_code == 200:
-                record(PASS, f"Confluence {label} folder {folder_id} — {result.json().get('title')}")
+                record(
+                    PASS, f"Confluence {label} folder {folder_id} — {result.json().get('title')}"
+                )
             else:
                 record(
                     FAIL,
@@ -219,11 +226,18 @@ def main() -> int:
     print("Read-only: no ticket, page, or comment is created.\n")
 
     env = load_dotenv(ROOT / ".env")
-    record(PASS if (ROOT / ".env").is_file() else WARN, ".env present" if (ROOT / ".env").is_file() else ".env not found (using shell environment)")
+    record(
+        PASS if (ROOT / ".env").is_file() else WARN,
+        ".env present" if (ROOT / ".env").is_file() else ".env not found (using shell environment)",
+    )
 
     registry_path = ROOT / "config" / "registry.yaml"
     if not registry_path.is_file():
-        record(FAIL, "config/registry.yaml not found", "cp config/registry.example.yaml config/registry.yaml")
+        record(
+            FAIL,
+            "config/registry.yaml not found",
+            "cp config/registry.example.yaml config/registry.yaml",
+        )
         return 1
     try:
         registry = ConfigRegistry.from_yaml_file(registry_path)
@@ -237,7 +251,11 @@ def main() -> int:
             continue
         print(f"\n\033[1mTenant: {project_id}\033[0m")
         if "REPLACE" in tenant.confluence_source_folder_id:
-            record(FAIL, "config still contains REPLACE_ placeholders", "Fill in SETUP-GUIDE Part 2 values.")
+            record(
+                FAIL,
+                "config still contains REPLACE_ placeholders",
+                "Fill in SETUP-GUIDE Part 2 values.",
+            )
             continue
         check_atlassian(tenant, env)
 
@@ -247,7 +265,10 @@ def main() -> int:
     check_key("Anthropic API key", registry.system.anthropic_api_key_ref, env, probe="anthropic")
     if registry.system.observability.langsmith_enabled:
         check_key(
-            "LangSmith API key", registry.system.observability.langsmith_api_key_ref, env, probe="langsmith"
+            "LangSmith API key",
+            registry.system.observability.langsmith_api_key_ref,
+            env,
+            probe="langsmith",
         )
     else:
         record(SKIP, "LangSmith (set system.observability.langsmith_enabled: true to enable)")

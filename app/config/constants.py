@@ -37,6 +37,7 @@ def prd_marker_label(prd_id: str) -> str:
     """
     return f"{PRD_LABEL_PREFIX}{prd_id}"
 
+
 # FR-02 — the title gate. The demo-agreed convention is the same for all tenants.
 PRD_TITLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^final_PRD_(?P<name>.+)$")
 

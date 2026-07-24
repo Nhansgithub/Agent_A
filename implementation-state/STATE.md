@@ -11,8 +11,8 @@
 
 ## Where the build is
 
-Epic 1 (foundation) in progress. **7 / 39 stories DONE** — 1.1 … 1.7.
-Test suite: **192 passed**, `ruff check` clean, **5/5 import-linter contracts kept**.
+Epic 1 (foundation) in progress. **8 / 39 stories DONE** — 1.1 … 1.8.
+Test suite: **227 passed**, `ruff check` clean, **5/5 import-linter contracts kept**.
 
 What exists and works:
 
@@ -29,41 +29,42 @@ What exists and works:
   with a typed outcome for every drop reason. Admission writes the dedupe key and the PRD row in one
   transaction, and the UNIQUE constraint *is* the duplicate check (not check-then-write).
 
-Nothing is blocked yet. No credentials have been needed so far — the whole suite runs offline.
+- **Both Atlassian adapters** (S1.7–1.8). Jira v3 with mandatory ADF bodies; Confluence v2 with the
+  two v1 exceptions (folder move, content restrictions) and a storage→Markdown converter.
+
+Nothing is blocked yet — the whole suite runs offline with no credentials. Live verification of the
+adapters waits on the Atlassian API token (BLOCKERS → OPEN).
 
 ---
 
 ## ▶ Next Action
 
-**Story 1.8 — `ConfluenceAdapter` + markdown converter** (`app/adapters/confluence.py`, AD-7, AD-14).
+**Story 1.9 — In-invocation LangGraph orchestrator, stage machine, and serial queue**
+(`app/orchestrator/`, AD-6 / AD-11 / AD-2 / AD-5).
 
-Read its ACs in [`planning-artifacts/epics.md`](../planning-artifacts/epics.md) (Epic 1, Story 1.8).
-Two traps the architecture already resolved — do not rediscover them:
+Read its ACs in [`planning-artifacts/epics.md`](../planning-artifacts/epics.md) (Epic 1, Story 1.9).
+The shape AD-11 mandates, per webhook invocation:
 
-1. **Never place a page into a folder via the v2 `parentId`** — it returns 500 for folder parents.
-   Use the **v1** move endpoint `PUT /wiki/rest/api/content/{id}/move/append/{folderId}` (AD-14).
-2. **Content restrictions are v1-only** Cloud endpoints (`/wiki/rest/api/content/{id}/restriction/*`),
-   and an edit restriction **must include the agent's own account** or the API 400s / locks the agent
-   out of its own page (AD-18).
+1. load the state record, 2. re-enter the graph at `stage` / `last_good_checkpoint`
+(`thread_id = prd_id`), 3. run the stages that can advance **without a new external event**,
+4. persist the new stage + recorded ids through the repository in one transaction, 5. **stop**.
 
-Everything else defaults to Confluence v2. Reuse `AtlassianClient` from `app/adapters/http.py` for
-auth, retry, and `AgentError` normalization. `storage_to_markdown` subclasses markdownify to handle
-Atlassian `ac:` / `ri:` macro tags.
+Non-negotiables: LangGraph's checkpointer is an ephemeral `InMemorySaver` scoped to that one
+invocation — never a cross-webhook durable store. `stage` is written only here. One PRD at a time
+(AD-5), which is also a memory-safety measure on the 1 GB box.
 
-Then: 1.9 (orchestrator + serial queue) → 1.10 (LangSmith tracing) → Epic 2.
-Critical-path before hardening, epics 1 → 6.
-
----
+Then: 1.10 (LangSmith tracing) → Epic 2.
 
 ## Environment notes
 
 - **Python 3.12.12** installed via pyenv and pinned in `.python-version`; venv at `.venv/`.
   Run tests with `.venv/bin/python -m pytest`.
 - **Docker:** not installed on this machine (BLOCKERS B-6). Not needed until Epic 6.
-- **Git:** this directory is **not** a git repository yet. Nothing has been committed. Worth raising
-  with the user before Epic 6 (S6.4 needs CI to build the image off-box).
-- **Secrets:** none present, none needed yet. `.env` is not created; `.env.example` documents every
-  variable. All credential gates are ANTICIPATED in [BLOCKERS.md](BLOCKERS.md).
+- **Git:** initialised, work committed locally. Nothing has been pushed to a remote — S6.4 will need
+  a remote + CI to build the image off-box.
+- **Secrets:** `.env` not yet created. Nhan is working through [../SETUP-GUIDE.md](../SETUP-GUIDE.md)
+  in parallel and **will send a message when setup is done**. Current provisioning status is tracked
+  in [BLOCKERS.md](BLOCKERS.md) → OPEN.
 
 ---
 
