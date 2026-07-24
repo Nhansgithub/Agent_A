@@ -9,14 +9,14 @@ blocked) · `BLOCKED` (cannot start — see BLOCKERS.md)
 
 **Order of work:** epic 1 → 6; within an epic, `critical-path` before `hardening`.
 
-**Progress: 23 / 39 DONE** — **Epics 1-3 complete.** Test suite: **363 passed**, ruff clean, **5/5 import-linter contracts kept**.
+**Progress: 29 / 39 DONE** — **Epics 1-4 complete.** Test suite: **390 passed**, ruff clean, **5/5 import-linter contracts kept**.
 
 | | Epic | Stories | Done |
 |---|---|---|---|
 | 1 | Multi-Tenant Foundation & Deployable Skeleton | 10 | **10 ✅** |
 | 2 | PRD Detection & Confirmation | 8 | **8 ✅** |
 | 3 | UserDoc Authoring & Draft Publication | 5 | **5 ✅** |
-| 4 | Human Review & Revision Loop | 6 | 0 |
+| 4 | Human Review & Revision Loop | 6 | **6 ✅** |
 | 5 | Approval & Publishing | 3 | 0 |
 | 6 | Resilience, Recovery & Operations | 7 | 0 |
 
@@ -67,12 +67,12 @@ round-trip Atlassian and LLM calls, advance explicit stages. Everything downstre
 
 | ID | Story | Tag | Governed by | Status | Evidence |
 |---|---|---|---|---|---|
-| 4.1 | Ingest PM feedback and route via a typed `FeedbackDecision` | critical-path | AD-16 | TODO | |
-| 4.2 | Apply structured feedback to produce a revised draft | critical-path | AD-16, AD-20 | TODO | |
-| 4.3 | Detect PASS on the Reviewer PM's Done transition | critical-path | AD-15 | TODO | |
-| 4.4 | Structure-confirmation sub-loop for plain-language feedback | hardening | AD-16 | TODO | |
-| 4.5 | Bounded clarification sub-loop (four enumerated triggers only) | hardening | AD-16 | TODO | |
-| 4.6 | Late-feedback-after-Done ignored; non-Done transitions park | hardening | AD-15 | TODO | |
+| 4.1 | Ingest PM feedback and route via a typed `FeedbackDecision` | critical-path | AD-16 | **DONE** | `app/domain/feedback.py`, `app/agents/feedback_interpreter/`, `app/orchestrator/feedback_routing.py` (pure, unit-tested on hand-built decisions). |
+| 4.2 | Apply structured feedback to produce a revised draft | critical-path | AD-16, AD-20 | **DONE** | `handlers_review.on_revising`; revise→update→summary→re-request; `review_round++`; uncapped, needs fresh comment each round (tested). |
+| 4.3 | Detect PASS on the Reviewer PM's Done transition | critical-path | AD-15 | **DONE** | `Orchestrator.apply_gate_done`; matches the Review ticket key; agent never transitions it. |
+| 4.4 | Structure-confirmation sub-loop for plain-language feedback | hardening | AD-16 | **DONE** | restate + park `awaiting_structure_confirm`; blocks until confirm (EH-08). |
+| 4.5 | Bounded clarification sub-loop (four enumerated triggers only) | hardening | AD-16 | **DONE** | `ClarificationTrigger` enum closes the list; CLARIFY without a trigger is rejected at construction (EH-08). |
+| 4.6 | Late-feedback-after-Done ignored; non-Done transitions park | hardening | AD-15 | **DONE** | comment outside review stages is a no-op (EH-06); gate-Done on the wrong ticket ignored (EH-09). |
 
 ## Epic 5 — Approval & Publishing
 

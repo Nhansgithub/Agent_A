@@ -351,3 +351,40 @@ the PM. **Suite: 363 passed. ruff clean. 5/5 contracts.**
 
 **Next:** Epic 4 — Human Review & Revision Loop (feedback ingest + typed routing, apply feedback,
 detect PASS, structure-confirmation and clarification sub-loops, late-feedback handling).
+
+---
+
+## 2026-07-24 · Session 1 (cont.) — Epic 4: Human Review & Revision Loop · **COMPLETE (6/6)**
+
+The first **webhook-driven** epic: a parked run reacts to a PM comment or a gate transition, rather
+than the graph driving it. Added two event-application methods to the orchestrator, both under the
+serial lock (AD-5): `apply_pm_comment` and `apply_gate_done`.
+
+- **`FeedbackDecision`** (`app/domain/feedback.py`, S4.1): the typed decision (AD-16) with four routes
+  and the four FR-08 clarification triggers as a closed enum. `__post_init__` rejects a CLARIFY with
+  no trigger and an APPLY with no feedback — EH-08's "may not block outside the enumerated cases" as a
+  construction-time invariant.
+- **Feedback interpreter** (`app/agents/feedback_interpreter/`, S4.1): the LLM half — reads a comment,
+  returns a `FeedbackDecision`. Parse failure raises rather than defaulting to a route.
+- **`route_feedback`** (`app/orchestrator/feedback_routing.py`, S4.1): the deterministic half — a pure
+  total function (decision × stage → action), unit-tested on hand-built decisions with no LLM. This is
+  the exact AD-16 split: fake the LLM, test the routing.
+- **`on_revising`** (S4.2): apply the confirmed feedback → update the draft in place → summarize →
+  re-request → park at `awaiting_review`. `review_round++` per applied round; `pending_feedback`
+  cleared so a later resume can't re-apply it. Tested that the loop runs 3 rounds but does **not**
+  self-spin — a fourth `advance()` with no fresh comment is a no-op (NFR-09).
+- **Structure-confirmation** (S4.4): plain feedback → restate in §6.2 → park
+  `awaiting_structure_confirm` → block until the PM confirms (EH-08).
+- **Clarification** (S4.5): a trigger → post the question → park `awaiting_clarification` → block.
+- **PASS detection** (S4.3): `apply_gate_done` matches the Review ticket key and advances to `passed`;
+  a Done on any other ticket is ignored. The agent only *detects* — never transitions a gate (AD-15).
+- **Late feedback** (S4.6): a comment outside the review stages is a no-op (EH-06).
+
+`pending_feedback` was added to the state record + schema so confirmed feedback survives to the
+revising stage across a crash (AD-11).
+
+**Suite: 390 passed. ruff clean. 5/5 contracts.** The flow now runs the full human loop:
+`awaiting_review ⇄ revising` and `→ passed` on PM Done.
+
+**Next:** Epic 5 — Approval & Publishing (Publishing ticket for the Head of Product, the publish
+gate, and the ordered idempotent publish transaction: restrict → move → export → complete).

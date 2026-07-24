@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS prd_state (
     prd_title                 TEXT,
     review_round              INTEGER NOT NULL DEFAULT 0,
     md_export_path            TEXT,
+    pending_feedback          TEXT,
     restriction_applied_at    TEXT,
     moved_to_published_at     TEXT,
     md_exported_at            TEXT,

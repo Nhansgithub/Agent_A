@@ -29,28 +29,26 @@ Run it later with `.venv/bin/python scripts/run_classifier_eval.py`.
 
 ## ▶ Next Action
 
-**Epic 4 — Human Review & Revision Loop.** The flow parks at `awaiting_review`. Epic 4 handles what
-the Reviewer PM does next: leave feedback (→ revise loop) or move the ticket to Done (→ PASS).
+**Epic 5 — Approval & Publishing.** The flow reaches `passed` (via the PM Done transition) and stops
+there (no handler). Epic 5 fills `passed` and `publishing`.
 
-Stories:
-- **4.1** (critical) Ingest a PM comment; the Feedback interpreter returns a typed
-  `FeedbackDecision{route, trigger, assumption}` in `app/domain/`. Orchestrator routing off it is
-  deterministic + unit-tested; only the decision-producing LLM is eval-tested (AD-16).
-- **4.2** (critical) Apply structured feedback → revised draft + change summary + re-request;
-  `review_round++`, per-round cost in LangSmith (NFR-09). Uses `Author.revise` + `Publisher.update_draft`.
-- **4.3** (critical) Detect PASS: the PM's Done transition on the Review ticket → advance to `passed`.
-  The agent never transitions it (AD-15). This is an `issue_updated` webhook path, not a stage handler.
-- **4.4** (hardening) Structure-confirmation sub-loop for plain-language feedback → `awaiting_
-  structure_confirm`, block until the PM confirms (EH-08).
-- **4.5** (hardening) Bounded clarification sub-loop — the 4 enumerated FR-08 triggers only; else
-  proceed with a stated assumption. → `awaiting_clarification` (EH-08).
-- **4.6** (hardening) Late-feedback-after-Done ignored (EH-06); non-Done terminal transitions park (EH-09).
+- **5.1** (critical) `passed` handler: post a confirmation comment on the Review ticket, create the
+  Publishing ticket in the Main project for the Head of Product (find-or-create by marker, AD-11),
+  advance to `awaiting_publish_approval` (park). Uses `TicketManager.create_publishing_ticket`
+  (already built in Epic 3).
+- **5.2** (critical) Head of Product publish gate: already handled by `Orchestrator.apply_gate_done`
+  (matches `publishing_ticket_key` → advances to `publishing`). Story 5.2 is mostly *tests* proving
+  the park + the ticket-match + no-self-transition (AD-15). Add the `passed`→`awaiting_publish_approval`
+  wiring in 5.1 so 5.2's gate detection has somewhere to land.
+- **5.3** (critical) `publishing` handler — the ordered, per-side-effect-idempotent transaction
+  (AD-18): (1) apply the Confluence edit restriction **including the agent account** (AD-10 cached id),
+  (2) v1-move the page into `confluence_published_folder_id`, (3) export storage→Markdown to
+  `md_export_dir`, (4) mark `complete`. Each step guarded by its state-record sub-checkpoint
+  (`restriction_applied_at` / `moved_to_published_at` / `md_exported_at`) so a resume skips what's done.
 
-Key design point: gate detection (4.3) and feedback ingest (4.1) are driven by **Jira webhooks**, not
-by the graph's advancing stages. The orchestrator's advancing-stage set already stops at
-`awaiting_review`; a comment or transition webhook is what re-enters the flow. This needs a small
-"apply an external event to a parked run" path alongside `advance()` — design it in `app/orchestrator/`
-so the webhook layer (Epic 1) feeds PM comments/transitions to it.
+Seams ready: `ConfluenceAdapter.set_edit_restriction` (refuses empty allow-list), `move_page`,
+`storage_to_markdown`; the AD-10 agent-account cache pattern from `DetectionAgent`. After Epic 5 the
+whole happy path runs end to end (against fakes); Epic 6 is deploy + resilience.
 
 ## Environment notes
 

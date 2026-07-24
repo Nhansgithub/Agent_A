@@ -66,6 +66,11 @@ class PrdState:
 
     md_export_path: str | None = None
 
+    pending_feedback: str | None = None
+    """FR-10/FR-11 — the confirmed structured feedback awaiting application in the `revising` stage.
+    Persisted (not held in memory) so a crash between confirming feedback and applying it resumes
+    correctly rather than losing the PM's input (AD-11)."""
+
     # --- AD-18 publish sub-checkpoints ---------------------------------------------------------
     # The publish transaction's four side-effects are individually guarded so resuming the
     # `publishing` stage skips what already succeeded and never re-applies it.

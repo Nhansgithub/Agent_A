@@ -24,9 +24,11 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 
+from app.agents.llm import CallMetadata
 from app.domain.errors import AgentError
-from app.domain.stage import PARKED_STAGES, TERMINAL_STAGES, QueueStatus, Stage
+from app.domain.stage import PARKED_STAGES, TERMINAL_STAGES, PendingGate, QueueStatus, Stage
 from app.domain.state import PrdState
+from app.orchestrator.feedback_routing import FeedbackAction, route_feedback
 from app.orchestrator.graph import RECURSION_LIMIT, StageStep, build_graph
 from app.orchestrator.stages import (
     Advance,
@@ -34,6 +36,11 @@ from app.orchestrator.stages import (
     Park,
     RunContext,
     Stay,
+)
+
+#: The review-loop waits a PM comment may legitimately act on (FR-09/10/12).
+_REVIEW_STAGES = frozenset(
+    {Stage.AWAITING_REVIEW, Stage.AWAITING_STRUCTURE_CONFIRM, Stage.AWAITING_CLARIFICATION}
 )
 
 logger = logging.getLogger(__name__)
@@ -103,6 +110,162 @@ class Orchestrator:
         """
         async with self._lock:
             return await self._advance_unlocked(prd_id)
+
+    # -- webhook-driven re-entry (Epic 4/5) ----------------------------------------------------
+
+    async def apply_pm_comment(self, prd_id: str, *, comment_text: str) -> RunResult:
+        """A PM comment arrived on the Review ticket (FR-09/10/08).
+
+        Interprets the comment, routes on the typed decision **deterministically** (AD-16), and acts:
+        revise, ask for structure confirmation, or ask a clarifying question. Runs under the serial
+        lock so it never interleaves with `advance()` (AD-5).
+        """
+        async with self._lock:
+            state = self._repository.state.require(prd_id)
+            if state.stage not in _REVIEW_STAGES:
+                # EH-06 — feedback after Done (or in any non-review stage) is not processed.
+                return RunResult(
+                    prd_id,
+                    state.stage,
+                    stopped_reason=f"comment ignored: run is at {state.stage.value}, not in review",
+                )
+
+            context = self._context_factory(state)
+            awaiting_reply = state.stage in {
+                Stage.AWAITING_STRUCTURE_CONFIRM,
+                Stage.AWAITING_CLARIFICATION,
+            }
+
+            try:
+                decision = await context.interpret_comment(
+                    comment_text=comment_text,
+                    awaiting_reply=awaiting_reply,
+                    metadata=self._llm_metadata(state, "feedback_interpreter"),
+                )
+                outcome = route_feedback(decision, current_stage=state.stage)
+                await self._act_on_feedback(prd_id, state, context, decision, outcome)
+            except AgentError as error:
+                return self._to_error(prd_id, state, error)
+
+            # If we routed into `revising`, run it now (still holding the lock). Otherwise the run
+            # is parked (structure-confirm / clarification) and this is a no-op.
+            return await self._advance_unlocked(prd_id)
+
+    async def apply_gate_done(self, prd_id: str, *, issue_key: str) -> RunResult:
+        """A human moved a gate ticket to a Done-category status (FR-12 / FR-14, AD-15).
+
+        The agent only *detects* this — it never transitions a gate ticket itself. Advances the
+        internal stage past the gate, matched to the specific ticket so an unrelated Done is ignored.
+        """
+        async with self._lock:
+            state = self._repository.state.require(prd_id)
+
+            if state.stage is Stage.AWAITING_REVIEW and issue_key == state.review_ticket_key:
+                self._repository.state.advance_stage(prd_id, Stage.PASSED)  # FR-12 PASS
+                return await self._advance_unlocked(prd_id)
+
+            if (
+                state.stage is Stage.AWAITING_PUBLISH_APPROVAL
+                and issue_key == state.publishing_ticket_key
+            ):
+                self._repository.state.advance_stage(prd_id, Stage.PUBLISHING)  # FR-14 approve
+                return await self._advance_unlocked(prd_id)
+
+            # A Done on the wrong ticket, or in the wrong stage — ignore (EH-06/EH-09 park).
+            return RunResult(
+                prd_id,
+                state.stage,
+                stopped_reason=f"gate Done on {issue_key} ignored at stage {state.stage.value}",
+            )
+
+    async def _act_on_feedback(self, prd_id, state, context, decision, outcome) -> None:
+        """Persist the routing outcome. The *decision* is the LLM's; the *routing* is deterministic."""
+        if outcome.action is FeedbackAction.APPLY_FEEDBACK:
+            feedback = decision.structured_feedback.strip() or (state.pending_feedback or "")
+            self._repository.state.advance_stage(
+                prd_id,
+                Stage.REVISING,
+                pending_feedback=feedback,
+                queue_status=QueueStatus.IN_PROGRESS,
+            )
+        elif outcome.action is FeedbackAction.ASK_STRUCTURE_CONFIRM:
+            await context.post_comment(
+                state.review_ticket_key or "",
+                self._structure_confirm_body(context, decision),
+            )
+            self._repository.state.advance_stage(
+                prd_id,
+                Stage.AWAITING_STRUCTURE_CONFIRM,
+                pending_gate=PendingGate.PM_STRUCTURE_CONFIRM,
+                queue_status=QueueStatus.IDLE,
+                pending_feedback=decision.structured_feedback.strip(),
+            )
+        elif outcome.action is FeedbackAction.ASK_CLARIFICATION:
+            await context.post_comment(
+                state.review_ticket_key or "", self._clarification_body(context, decision)
+            )
+            self._repository.state.advance_stage(
+                prd_id,
+                Stage.AWAITING_CLARIFICATION,
+                pending_gate=PendingGate.PM_CLARIFICATION,
+                queue_status=QueueStatus.IDLE,
+            )
+        elif outcome.action is FeedbackAction.IGNORE and state.stage is not outcome.target_stage:
+            # PM did not confirm a restatement → back to open review for another round.
+            self._repository.state.advance_stage(
+                prd_id,
+                outcome.target_stage,
+                pending_gate=outcome.gate,
+                queue_status=QueueStatus.IDLE,
+            )
+
+    @staticmethod
+    def _structure_confirm_body(context, decision) -> dict:
+        from app.domain import adf
+
+        return adf.doc(
+            adf.paragraph(
+                adf.mention(context.tenant.pm_account_id),
+                adf.text(
+                    " you didn't use the feedback format, so I curated it like this — is this what "
+                    "you mean? I won't change anything until you confirm."
+                ),
+            ),
+            adf.code_block(decision.structured_feedback or "(no structured feedback)"),
+            adf.paragraph(adf.text(decision.question or "Reply to confirm or correct.")),
+        )
+
+    @staticmethod
+    def _clarification_body(context, decision) -> dict:
+        from app.domain import adf
+
+        return adf.doc(
+            adf.paragraph(
+                adf.mention(context.tenant.pm_account_id),
+                adf.text(" before I revise, I need to check one thing:"),
+            ),
+            adf.paragraph(adf.text(decision.question or "Could you clarify?")),
+        )
+
+    def _llm_metadata(self, state: PrdState, role: str) -> CallMetadata:
+        return CallMetadata(
+            correlation_id=state.correlation_id,
+            prd_id=state.prd_id,
+            agent_role=role,
+            review_round=state.review_round,
+            tenant=state.project_id,
+        )
+
+    def _to_error(self, prd_id: str, state: PrdState, error: AgentError) -> RunResult:
+        failed = self._repository.state.mark_error(prd_id, str(error))
+        logger.error(
+            "review-loop step failed: prd_id=%s stage=%s operation=%s correlation_id=%s",
+            prd_id,
+            failed.last_good_checkpoint,
+            error.operation,
+            state.correlation_id,
+        )
+        return RunResult(prd_id, Stage.ERROR, stopped_reason=str(error), error=error)
 
     async def _advance_unlocked(self, prd_id: str) -> RunResult:
         state = self._repository.state.require(prd_id)
