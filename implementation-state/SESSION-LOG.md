@@ -226,3 +226,51 @@ Both scripts smoke-tested for clean, actionable failure output with no credentia
 **Suite: 227 passed. ruff clean. 5/5 import-linter contracts kept.**
 
 **Next:** Story 1.9 — in-invocation LangGraph orchestrator, stage machine, and serial queue.
+
+---
+
+## 2026-07-24 · Session 1 (cont.) — Stories 1.9 + 1.10 · **EPIC 1 COMPLETE**
+
+### S1.9 — In-invocation orchestrator, stage machine, serial queue · **DONE**
+- `app/orchestrator/stages.py`: three outcomes a handler can return — `Advance`, `Park`, `Stay`.
+  Handlers decide *what happened*; the orchestrator decides *what is written* (AD-2's split). A stage
+  with no handler **stops** rather than skipping: silently advancing would push the run past a human
+  gate, the exact failure AD-15 prevents.
+- `app/orchestrator/graph.py`: LangGraph as in-invocation control flow only. A plain `StateGraph`
+  always starts at START, so START dispatches *conditionally* to the node named by the recorded
+  stage — that conditional entry router is what makes "re-enter at `stage`" work. Checkpointer is
+  `InMemorySaver`; the graph is rebuilt per invocation so no cross-PRD singleton survives (AD-5).
+- `app/orchestrator/runner.py`: the five AD-11 steps. Persistence happens **per stage boundary**, not
+  once at the end — that is what makes resume cheap, and a test asserts a stage failing after two
+  successful ones keeps their recorded ticket ids.
+- Serial queue via a single `asyncio.Lock` — deliberately the only cross-PRD object, so lifting it
+  later yields parallelism rather than a redesign. A concurrency probe asserts peak overlap is 1.
+
+### S1.10 — LangSmith tracing harness · **DONE**
+- `app/agents/tracing.py`: `Tracer` protocol with `NullTracer` (log-only) and `LangSmithTracer`
+  (`RunTree`). LangSmith failures are caught and logged, never raised — losing observability is bad,
+  dropping a PRD because a metrics backend is down is worse.
+- `app/agents/llm.py`: the one shared Anthropic client all six roles use. Tracing is **structural**,
+  not conventional: the span wraps the request inside the only module permitted to import the SDK,
+  and a test greps `app/` for `import anthropic` statements to keep it that way. Cost is derived per
+  call from pinned per-model rates, so NFR-01's cost figure is always present.
+- Content gating (AD-20) defaults to off: timing/tokens/cost always recorded, prompt and completion
+  text not egressed. Tests assert a confidential prompt does not appear anywhere in the span.
+
+### A real bug the orchestrator tests caught
+`AgentError` was `@dataclass(frozen=True, slots=True)` on an `Exception` subclass. `slots=True`
+replaces the class object, which breaks `super()` inside the generated methods when the exception is
+copied or re-raised — and LangGraph does exactly that when a node fails, producing
+`TypeError: super(type, obj): obj must be an instance or subtype of type`. Rewritten as a plain
+class with an explicit `__init__` and `__reduce__`. An exception has to survive arbitrary machinery,
+so the boring implementation is the correct one.
+
+Three test-fixture bugs were also genuine: fake handlers attempted transitions the §9 machine
+rejects (`detected → awaiting_review`). The guard working on my own test code is a good sign.
+
+**Suite: 278 passed. ruff clean. 5/5 import-linter contracts kept.**
+
+**Decisions recorded:** D-12 (AgentError is a plain class), D-13 (tracing is structural, not
+configuration-dependent).
+
+**Next:** Epic 2 — PRD Detection & Confirmation, starting at Story 2.1.

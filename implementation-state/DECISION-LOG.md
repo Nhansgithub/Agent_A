@@ -161,3 +161,30 @@ because auth was baked into the client at construction time.
 **Rationale:** an injected or pooled client must not be able to silently drop authentication — that
 failure mode surfaces as a confusing 401 far from its cause. Found by a test, fixed in the design
 rather than worked around in the test.
+
+### D-12 · `AgentError` is a plain Exception class, not a dataclass  (2026-07-24, story S1.9)
+**Context:** `AgentError` was `@dataclass(frozen=True, slots=True)`. When a stage handler raised one,
+LangGraph's node machinery produced `TypeError: super(type, obj): obj must be an instance or subtype
+of type` instead of the error — so every error path was broken, not just cosmetically wrong.
+**Decision:** rewrite as a plain `Exception` subclass with an explicit `__init__`, `__slots__`,
+`__str__`, and `__reduce__`.
+**Rationale:** `slots=True` creates a *new* class object, and the dataclass-generated methods close
+over the original — so copying or re-raising the instance fails. Frameworks re-raise exceptions
+freely, so an exception type must survive that. The boring implementation is the correct one here.
+`__reduce__` keeps every field intact across copy/pickle.
+**Found by:** the Story 1.9 orchestrator tests, which were the first code to raise an `AgentError`
+through a framework rather than catching it locally.
+**Revisit if:** never — this is a language-level constraint, not a preference.
+
+### D-13 · Tracing is structural, so it cannot be configured off  (2026-07-24, story S1.10)
+**Context:** NFR-01 requires 100% of LLM calls traced. The obvious implementation — branch on
+`langsmith_enabled` and skip tracing when off — makes that guarantee depend on configuration.
+**Decision:** every call goes through a tracer unconditionally. Disabling LangSmith swaps in a
+`NullTracer` that still opens a span and logs latency/tokens; it does not remove the span. Tracing
+lives *inside* `LlmClient`, which a test enforces is the only module importing the Anthropic SDK.
+**Rationale:** "100% of calls are traced" should be a property of the code shape, not of a config
+value someone can flip. With one door to Claude and a span inside it, there is no path that skips
+tracing — the same reasoning as AD-1 putting all Atlassian I/O behind two adapters.
+**Alternatives rejected:** decorating each agent's call site (any new agent could forget);
+conditionally skipping the span (makes the NFR configuration-dependent).
+**Revisit if:** span overhead ever shows up in the 1 GB memory envelope — measure before changing.

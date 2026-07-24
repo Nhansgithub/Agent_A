@@ -9,11 +9,11 @@ blocked) · `BLOCKED` (cannot start — see BLOCKERS.md)
 
 **Order of work:** epic 1 → 6; within an epic, `critical-path` before `hardening`.
 
-**Progress: 8 / 39 DONE** · test suite: **227 passed**, ruff clean, **5/5 import-linter contracts kept**.
+**Progress: 10 / 39 DONE** — **Epic 1 complete.** Test suite: **278 passed**, ruff clean, **5/5 import-linter contracts kept**.
 
 | | Epic | Stories | Done |
 |---|---|---|---|
-| 1 | Multi-Tenant Foundation & Deployable Skeleton | 10 | 8 |
+| 1 | Multi-Tenant Foundation & Deployable Skeleton | 10 | **10 ✅** |
 | 2 | PRD Detection & Confirmation | 8 | 0 |
 | 3 | UserDoc Authoring & Draft Publication | 5 | 0 |
 | 4 | Human Review & Revision Loop | 6 | 0 |
@@ -37,8 +37,8 @@ round-trip Atlassian and LLM calls, advance explicit stages. Everything downstre
 | 1.6 | Route-before-work tenant resolution | critical-path | AD-3 | **DONE** | `app/router.py` — `TenantRouter` with folder / project-key / space-key resolution and a documented single-tenant fallback. |
 | 1.7 | `JiraAdapter` — domain verbs, ADF bodies, retry, error normalization | critical-path | AD-7 | **DONE** | `app/adapters/{http,jira}.py`, `app/domain/{adf,atlassian}.py`; `tests/test_jira_adapter.py` — 32 tests against a fake transport (no network). |
 | 1.8 | `ConfluenceAdapter` + markdown converter (v2 default, v1 move/restrictions) | critical-path | AD-7, AD-14 | **DONE** | `app/adapters/{confluence,markdown}.py`; `tests/test_confluence_adapter.py` — 35 tests. v1 move/append + v1 restrictions; markdownify with an Atlassian `ac:`/`ri:` normalization pass. |
-| 1.9 | In-invocation LangGraph orchestrator, stage machine, serial queue | critical-path | AD-6, AD-11, AD-2, AD-5 | TODO | |
-| 1.10 | LangSmith tracing harness for all LLM calls | critical-path | AD-20 | TODO | |
+| 1.9 | In-invocation LangGraph orchestrator, stage machine, serial queue | critical-path | AD-6, AD-11, AD-2, AD-5 | **DONE** | `app/orchestrator/{stages,graph,runner}.py`; `tests/test_orchestrator.py` — 25 tests incl. gate-stop, per-stage persistence, error checkpointing, and a serial-queue concurrency probe. |
+| 1.10 | LangSmith tracing harness for all LLM calls | critical-path | AD-20 | **DONE** | `app/agents/{llm,tracing}.py`; `tests/test_llm_client.py` — 26 tests. Tracing is structural: the span wraps the request inside the only module allowed to import the Anthropic SDK (asserted by test). |
 
 ## Epic 2 — PRD Detection & Confirmation
 

@@ -11,8 +11,8 @@
 
 ## Where the build is
 
-Epic 1 (foundation) in progress. **8 / 39 stories DONE** — 1.1 … 1.8.
-Test suite: **227 passed**, `ruff check` clean, **5/5 import-linter contracts kept**.
+**Epic 1 is COMPLETE (10/10).** **10 / 39 stories DONE** overall.
+Test suite: **278 passed**, `ruff check` clean, **5/5 import-linter contracts kept**.
 
 What exists and works:
 
@@ -31,6 +31,11 @@ What exists and works:
 
 - **Both Atlassian adapters** (S1.7–1.8). Jira v3 with mandatory ADF bodies; Confluence v2 with the
   two v1 exceptions (folder move, content restrictions) and a storage→Markdown converter.
+- **Orchestrator + serial queue** (S1.9). Load → re-enter the graph at the recorded stage → run what
+  can advance → persist per stage boundary → stop. LangGraph is in-invocation only (`InMemorySaver`,
+  fresh graph per invocation). Handlers return outcomes; only the orchestrator writes `stage`.
+- **LLM runtime + tracing** (S1.10). One shared Anthropic client; every call wrapped in a span
+  carrying latency, tokens, cost, correlation id, and `review_round`. Content gating defaults to off.
 
 Nothing is blocked yet — the whole suite runs offline with no credentials. Live verification of the
 adapters waits on the Atlassian API token (BLOCKERS → OPEN).
@@ -39,21 +44,23 @@ adapters waits on the Atlassian API token (BLOCKERS → OPEN).
 
 ## ▶ Next Action
 
-**Story 1.9 — In-invocation LangGraph orchestrator, stage machine, and serial queue**
-(`app/orchestrator/`, AD-6 / AD-11 / AD-2 / AD-5).
+**Epic 2 — PRD Detection & Confirmation.** Start with **Story 2.1** (detect a new PRD page in the
+watched source folder), then 2.2 → 2.5 (critical path), then 2.6 → 2.8 (hardening).
 
-Read its ACs in [`planning-artifacts/epics.md`](../planning-artifacts/epics.md) (Epic 1, Story 1.9).
-The shape AD-11 mandates, per webhook invocation:
+Epic 1 left the seams these plug into:
 
-1. load the state record, 2. re-enter the graph at `stage` / `last_good_checkpoint`
-(`thread_id = prd_id`), 3. run the stages that can advance **without a new external event**,
-4. persist the new stage + recorded ids through the repository in one transaction, 5. **stop**.
+- Register handlers on `HandlerRegistry` for `Stage.DETECTED` (2.1–2.3) and `Stage.CONFIRMED` (2.5).
+  `registry.missing()` lists advancing stages still unhandled.
+- Detection needs `ConfluenceAdapter.get_page_ancestors()` when the webhook payload omits the
+  container, plus the AD-10 triple guard: watched-folder **and** no `agent-generated` label **and**
+  not authored by the agent account (resolve once per tenant via `get_current_user`, then cache).
+- The Classifier calls `LlmClient.complete(model=system.models.classifier, ...)` — model from config
+  (AD-17), never a literal.
 
-Non-negotiables: LangGraph's checkpointer is an ephemeral `InMemorySaver` scoped to that one
-invocation — never a cross-webhook durable store. `stage` is written only here. One PRD at a time
-(AD-5), which is also a memory-safety measure on the 1 GB box.
-
-Then: 1.10 (LangSmith tracing) → Epic 2.
+**Story 2.4 is the one hard, measurable gate** (0 FP / 0 FN on the *holdout* set, ×3, confusion
+matrix). Build the fixture sets under `fixtures/classifier/{dev,holdout}/` early — the readiness
+report calls it the riskiest single deliverable. The eval harness can be written and unit-tested
+against a fake LLM now; only the *live* accuracy run needs the Anthropic key.
 
 ## Environment notes
 
