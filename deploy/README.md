@@ -21,8 +21,11 @@ Push the repo to GitHub, then either push a `v*` tag or run the workflow manuall
 git tag v0.1.0 && git push origin v0.1.0     # or: Actions -> build-image -> Run workflow
 ```
 
-The image lands at `ghcr.io/<owner>/<repo>:latest`. **A GHCR image is private by default**, so the
-Droplet must authenticate before it can pull — see step 3.
+The image lands at **`ghcr.io/nhansgithub/agent_a`** (`:latest` and `:<tag>`). GHCR requires the
+image name to be **lowercase** — `github.repository` keeps the GitHub casing (`Nhansgithub/Agent_A`),
+so the workflow lowercases it before tagging.
+
+This package is currently **public**, so the Droplet needs no registry login.
 
 Only if you have Docker locally and prefer to build by hand:
 
@@ -49,18 +52,17 @@ On the Droplet:
 mkdir -p /opt/agent && cd /opt/agent
 # copy your filled-in .env and config/ here (scp), then:
 
-# GHCR images are private by default — authenticate first, with a GitHub PAT that has read:packages.
-# (Use --password-stdin: a token on the command line lands in the shell history.)
-echo "$GITHUB_PAT" | docker login ghcr.io -u <github-username> --password-stdin
-
-docker pull <registry>/leapxpert-agent-a:latest
+# ghcr.io/nhansgithub/agent_a is PUBLIC, so no docker login is needed. (If you make the package
+# private later, authenticate first with a GitHub PAT carrying read:packages — via
+# --password-stdin, so the token does not land in the shell history.)
+docker pull ghcr.io/nhansgithub/agent_a:latest
 docker run -d --name agent --restart unless-stopped \
     --memory 768m \
     -p 127.0.0.1:8000:8000 \
     --env-file /opt/agent/.env \
     -v /opt/agent/config:/app/config:ro \
     -v /data:/data \
-    <registry>/leapxpert-agent-a:latest
+    ghcr.io/nhansgithub/agent_a:latest
 ```
 
 `--memory 768m` leaves headroom under 1 GB + swap. FastAPI is bound to localhost via the port
