@@ -8,9 +8,34 @@ Protocol): stop that thread, record it here, ask the user, and continue with eve
 
 ---
 
-## OPEN
+> **Setup instructions for every gate below live in [`../SETUP-GUIDE.md`](../SETUP-GUIDE.md).**
+> Two helper scripts make it concrete: `scripts/discover_ids.py` prints the Atlassian IDs to paste
+> into `config/registry.yaml`, and `scripts/verify_setup.py` checks the whole configuration
+> read-only. Nhan is working through the guide in parallel with the build (confirmed 2026-07-24).
 
-_None yet — see ANTICIPATED. This section fills as the build reaches each gate._
+## OPEN — with Nhan, being provisioned
+
+Status as reported by Nhan on 2026-07-24.
+
+| Gate | Status | Still needed |
+|---|---|---|
+| **Atlassian account, projects, folders** | ✅ Done | — Jira Main + Review projects and a Confluence space with source / draft / published folders already exist. |
+| **Atlassian API token** | ⏳ Not started | SETUP-GUIDE Part 1. Nhan had not created one and did not know how — hence the guide. |
+| **Atlassian IDs** (project keys, folder ids, account ids) | ⏳ Not collected | SETUP-GUIDE Part 2 — `scripts/discover_ids.py` prints them all. |
+| **Anthropic API key** | ✅ Have it | Just needs pasting into `.env` (SETUP-GUIDE Part 3). |
+| **Webhook shared secret** | ⏳ Not started | Self-generated, not fetched — `openssl rand -hex 32` (SETUP-GUIDE Part 4). Nhan was unsure what this was. |
+| **LangSmith account + key** | ⏳ Not started | Free tier confirmed sufficient (SETUP-GUIDE Part 5). |
+| **DigitalOcean Droplet + Spaces** (litestream) | ⏳ Not started | Only needed for Epic 6 (SETUP-GUIDE Part 8). |
+
+**Naming note:** Nhan referred to the second Jira project as *"Preview"*; the PRD and this codebase
+call it the **Review** project. Same thing — only its project *key* matters in config.
+
+**Nhan will send a message when setup is complete.** Until then: keep building against fakes, mark
+anything needing live verification as `PARTIAL`, and do not block on these.
+
+---
+
+## ANTICIPATED (reference detail)
 
 ---
 

@@ -123,6 +123,12 @@ an account, a paid resource, or a live tenant. When that happens:
    which story it blocks, why it cannot be self-served, and exact steps for the human.
 3. **Ask the user**, then continue with everything *not* blocked by it.
 
+**Setup instructions for every known gate live in [SETUP-GUIDE.md](SETUP-GUIDE.md)** — written for
+someone who has not connected a third-party API before. Two scripts back it up:
+`scripts/discover_ids.py` (prints the Atlassian IDs for `config/registry.yaml`) and
+`scripts/verify_setup.py` (read-only check of the whole configuration). Keep both current when
+config gains a field.
+
 Known gates: Anthropic API key · LangSmith account+key · Atlassian Cloud tenant (Jira + Confluence)
 with API tokens and test projects/spaces/folders · DigitalOcean Droplet + Spaces · container registry / CI
 · Docker (not installed locally).
