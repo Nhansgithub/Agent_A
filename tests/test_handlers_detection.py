@@ -97,7 +97,10 @@ class FakeContext:
     def page_url(self) -> str:
         return f"https://x/{self.prd_id}"
 
-    def page_markdown(self) -> str:
+    async def get_page_event(self) -> ConfluencePageEvent:
+        return self.page_event
+
+    async def page_markdown(self) -> str:
         return self.markdown
 
 

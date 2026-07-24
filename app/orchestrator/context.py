@@ -67,16 +67,41 @@ class RunContext:
         self._repository = repository
         self._agent_account_cache = agent_account_cache
         self._prd_markdown: str | None = None
+        self._space_id: str | None = None
 
     # -- content helpers -----------------------------------------------------------------------
 
-    def page_markdown(self) -> str:
-        """The source PRD as Markdown (cached after the first read)."""
-        return self._prd_markdown or ""
+    async def get_page_event(self):
+        """The triggering page as a `ConfluencePageEvent`.
 
-    async def load_prd_markdown(self) -> str:
+        Uses the webhook event if one was threaded in; otherwise builds it from a **live** `get_page`
+        + ancestors lookup. Fetching live rather than depending on the ephemeral event is what makes
+        detection work identically on a webhook, a resume, and a reconcile (AD-11/AD-22).
+        """
+        if self.page_event is not None:
+            return self.page_event
+        from app.domain.events import ConfluencePageEvent, EventType
+
         page = await self.confluence.get_page(self.prd_id)
-        self._prd_markdown = self.confluence.storage_to_markdown(page.body_storage)
+        container = page.parent_id
+        if not container:
+            ancestors = await self.confluence.get_page_ancestors(self.prd_id)
+            container = ancestors[0] if ancestors else None
+        return ConfluencePageEvent(
+            event_type=EventType.CONFLUENCE_PAGE_CREATED,
+            page_id=page.id,
+            version_number=page.version,
+            title=page.title,
+            creator_account_id=page.author_account_id,
+            container_id=container,
+            labels=page.labels,
+        )
+
+    async def page_markdown(self) -> str:
+        """The source PRD as Markdown (fetched live and cached after the first read)."""
+        if self._prd_markdown is None:
+            page = await self.confluence.get_page(self.prd_id)
+            self._prd_markdown = self.confluence.storage_to_markdown(page.body_storage)
         return self._prd_markdown
 
     async def current_draft_markdown(self) -> str:
@@ -88,12 +113,18 @@ class RunContext:
         return self.confluence.storage_to_markdown(page.body_storage)
 
     def draft_page_url(self, page_id: str) -> str:
-        return f"{self._base_url}/wiki/pages/{page_id}" if page_id else ""
+        return f"{self._base_url}/wiki/pages/viewpage.action?pageId={page_id}" if page_id else ""
 
-    def confluence_space_id(self) -> str:
-        # The v2 create-page API needs the space *id*. For the demo the source page's space is used;
-        # the composition root resolves it once and passes it in via a subclass/override if needed.
-        return self.tenant.confluence_space_key or ""
+    async def confluence_space_id(self) -> str:
+        """The numeric space **id** the v2 create-page API needs (config stores the space *key*).
+
+        Resolved from the draft folder's `spaceId` and cached — the draft page is created in the
+        draft folder's space, so that folder is the authoritative source.
+        """
+        if self._space_id is None:
+            folder = await self.confluence.get_folder(self.tenant.confluence_draft_folder_id)
+            self._space_id = str(folder.get("spaceId") or "")
+        return self._space_id
 
     # -- agent-account resolution (AD-10, one source) ------------------------------------------
 
@@ -118,7 +149,7 @@ class RunContext:
             comment_text=comment_text,
             awaiting_reply=awaiting_reply,
             draft_markdown=await self.current_draft_markdown(),
-            prd_markdown=self.page_markdown() or await self.load_prd_markdown(),
+            prd_markdown=await self.page_markdown(),
             metadata=metadata,
         )
 

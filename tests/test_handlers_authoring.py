@@ -85,20 +85,26 @@ class FakeContext:
         )
     )
 
-    def page_markdown(self) -> str:
+    async def page_markdown(self) -> str:
         return "The PRD body."
 
     def draft_page_url(self, page_id: str) -> str:
         return f"https://x/{page_id}"
 
-    def confluence_space_id(self) -> str:
+    async def confluence_space_id(self) -> str:
         return "space-1"
 
 
 def build(*, stage: Stage = Stage.DRAFTED, **state_kwargs):
     repository = Repository(Database(":memory:"))
     repository.state.create(
-        PrdState(prd_id="page-1", project_id="tenant_one", stage=stage, **state_kwargs)
+        PrdState(
+            prd_id="page-1",
+            project_id="tenant_one",
+            stage=stage,
+            prd_title="final_PRD_Widget",
+            **state_kwargs,
+        )
     )
     context = FakeContext()
     registry = HandlerRegistry({Stage.DRAFTED: AuthoringHandlers().on_drafted})

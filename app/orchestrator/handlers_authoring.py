@@ -29,7 +29,6 @@ from app.agents.publisher import Publisher
 from app.agents.review_request import build_review_request
 from app.agents.ticket_manager import TicketManager
 from app.config.schema import TenantConfig
-from app.domain.events import ConfluencePageEvent
 from app.domain.stage import PendingGate, Stage
 from app.domain.state import PrdState
 from app.orchestrator.stages import Park, StageOutcome
@@ -43,17 +42,15 @@ class Epic3Context(Protocol):
     @property
     def tenant(self) -> TenantConfig: ...
     @property
-    def page_event(self) -> ConfluencePageEvent: ...
-    @property
     def author(self) -> AuthorAgent: ...
     @property
     def publisher(self) -> Publisher: ...
     @property
     def ticket_manager(self) -> TicketManager: ...
 
-    def page_markdown(self) -> str: ...
+    async def page_markdown(self) -> str: ...
     def draft_page_url(self, page_id: str) -> str: ...
-    def confluence_space_id(self) -> str: ...
+    async def confluence_space_id(self) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,8 +58,8 @@ class AuthoringHandlers:
     async def on_drafted(self, context: Epic3Context, state: PrdState) -> StageOutcome:
         # 1. FR-05 — draft + one self-critique pass.
         draft = await context.author.draft(
-            prd_title=context.page_event.title,
-            prd_markdown=context.page_markdown(),
+            prd_title=state.prd_title or "UserDoc",
+            prd_markdown=await context.page_markdown(),
             metadata=self._metadata(context, state, "author"),
         )
 
@@ -72,7 +69,7 @@ class AuthoringHandlers:
             prd_id=context.prd_id,
             title=draft.title,
             markdown=draft.markdown,
-            space_id=context.confluence_space_id(),
+            space_id=await context.confluence_space_id(),
             existing_page_id=state.userdoc_page_id,
         )
         page_id = published.page.id

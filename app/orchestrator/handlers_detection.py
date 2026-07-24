@@ -45,8 +45,6 @@ class Epic2Context(Protocol):
     @property
     def tenant(self) -> TenantConfig: ...
     @property
-    def page_event(self) -> ConfluencePageEvent: ...
-    @property
     def detection(self) -> DetectionAgent: ...
     @property
     def classifier(self) -> ClassifierAgent: ...
@@ -55,8 +53,9 @@ class Epic2Context(Protocol):
     @property
     def identity(self) -> IdentityResolver: ...
 
+    async def get_page_event(self) -> ConfluencePageEvent: ...
     def page_url(self) -> str: ...
-    def page_markdown(self) -> str: ...
+    async def page_markdown(self) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +65,8 @@ class DetectionHandlers:
     # -- stage: detected (FR-01, FR-02, FR-02a) ------------------------------------------------
 
     async def on_detected(self, context: Epic2Context, state: PrdState) -> StageOutcome:
-        result: DetectionResult = await context.detection.evaluate(
-            context.page_event, context.tenant
-        )
+        event = await context.get_page_event()
+        result: DetectionResult = await context.detection.evaluate(event, context.tenant)
 
         if result.verdict in (
             DetectionVerdict.NOT_IN_SOURCE_FOLDER,
@@ -79,43 +77,54 @@ class DetectionHandlers:
             return Stay(reason=result.reason)
 
         if result.needs_rename_request:
-            return await self._file_rename_request(context, state, result.reason)
+            return await self._file_rename_request(
+                context,
+                state,
+                result.reason,
+                page_title=event.title,
+                creator_account_id=event.creator_account_id,
+            )
 
-        return Advance(to_stage=Stage.CONFIRMED, note=result.reason)
+        return Advance(
+            to_stage=Stage.CONFIRMED, recorded={"prd_title": event.title}, note=result.reason
+        )
 
     # -- stage: confirmed (FR-03, EH-07) -------------------------------------------------------
 
     async def on_confirmed(self, context: Epic2Context, state: PrdState) -> StageOutcome:
         classification = await context.classifier.classify(
-            title=context.page_event.title,
-            body_markdown=context.page_markdown(),
+            title=state.prd_title or "",
+            body_markdown=await context.page_markdown(),
             metadata=self._llm_metadata(context, state, "classifier"),
         )
         if classification.accepted:
             return Advance(to_stage=Stage.PRD_TICKET_DONE, note=classification.reason)
 
         # EH-07 — a REJECT is handled exactly like a title mismatch: ask a human, do not guess.
+        event = await context.get_page_event()
         return await self._file_rename_request(
-            context, state, f"classifier rejected: {classification.reason}"
+            context,
+            state,
+            f"classifier rejected: {classification.reason}",
+            page_title=state.prd_title or event.title,
+            creator_account_id=event.creator_account_id,
         )
 
     # -- stage: prd_ticket_done (FR-04) --------------------------------------------------------
 
     async def on_prd_ticket_done(self, context: Epic2Context, state: PrdState) -> StageOutcome:
+        prd_name = state.prd_title or (await context.get_page_event()).title
         result = await context.ticket_manager.locate_or_create_tracking_ticket(
             tenant=context.tenant,
             prd_id=context.prd_id,
-            prd_name=context.page_event.title,
+            prd_name=prd_name,
             prd_url=context.page_url(),
         )
         # The tracking ticket is now Done (or was already). Advance to drafting (Epic 3). The
         # recorded key lets a resume adopt this ticket instead of creating a second one (AD-11).
         return Advance(
             to_stage=Stage.DRAFTED,
-            recorded={
-                "prd_tracking_ticket_key": result.issue.key,
-                "prd_title": context.page_event.title,
-            },
+            recorded={"prd_tracking_ticket_key": result.issue.key, "prd_title": prd_name},
             note=f"tracking ticket {result.issue.key} "
             + ("created" if result.created else "reused"),
         )
@@ -123,7 +132,13 @@ class DetectionHandlers:
     # -- shared: file the FR-02a rename request and park -------------------------------------
 
     async def _file_rename_request(
-        self, context: Epic2Context, state: PrdState, reason: str
+        self,
+        context: Epic2Context,
+        state: PrdState,
+        reason: str,
+        *,
+        page_title: str,
+        creator_account_id: str | None,
     ) -> StageOutcome:
         # A rename request may already exist from a prior attempt (AD-11) — do not file a second.
         if state.rename_request_ticket_key:
@@ -134,14 +149,14 @@ class DetectionHandlers:
             )
 
         resolution = await context.identity.resolve_uploading_pm(
-            confluence_account_id=context.page_event.creator_account_id,
+            confluence_account_id=creator_account_id,
             confluence_email=None,  # the page-created payload rarely carries an email
             tenant=context.tenant,
         )
         ticket = await context.ticket_manager.create_rename_request(
             tenant=context.tenant,
             prd_id=context.prd_id,
-            page_title=context.page_event.title,
+            page_title=page_title,
             page_url=context.page_url(),
             assignee_account_id=resolution.account_id,
             reason=reason,
