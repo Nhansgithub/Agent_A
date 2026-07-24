@@ -98,3 +98,42 @@ def test_health_reports_a_loaded_config(tmp_path) -> None:
 
     assert body["config"] == "loaded"
     assert body["webhooks"] == "mounted"
+
+
+def test_configure_logging_gives_app_loggers_a_handler() -> None:
+    """Without this, every AD-8 webhook drop is invisible in production.
+
+    `app.*` loggers propagate to root; uvicorn only configures `uvicorn.*`. With no root handler,
+    Python's lastResort fallback emits WARNING+ and discards INFO — so a dropped webhook answers 200
+    and leaves nothing but an access-log line to explain itself.
+    """
+    import logging
+
+    from app.main import configure_logging
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        root.handlers = []
+        configure_logging()
+        assert root.handlers, "root logger got no handler"
+        assert logging.getLogger("app.webhooks.router").isEnabledFor(logging.INFO)
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+
+def test_configure_logging_does_not_override_an_existing_setup() -> None:
+    """A host application's logging configuration must win."""
+    import logging
+
+    from app.main import configure_logging
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        sentinel = logging.NullHandler()
+        root.handlers = [sentinel]
+        configure_logging()
+        assert root.handlers == [sentinel]
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level

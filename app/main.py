@@ -13,6 +13,8 @@ smoke test does not require credentials — the webhook routes simply aren't mou
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -25,7 +27,30 @@ logger = logging.getLogger(__name__)
 _REGISTRY_PATH = Path(__file__).resolve().parents[1] / "config" / "registry.yaml"
 
 
+def configure_logging() -> None:
+    """Give the `app.*` loggers a handler so operational events are actually visible.
+
+    Uvicorn configures only its own `uvicorn.*` loggers. Ours propagate to the root logger, which has
+    no handler — so Python's `lastResort` fallback emits WARNING and above and **silently discards
+    INFO**. Every AD-8 drop (bad signature, duplicate, unroutable, unparseable) is logged at INFO, so
+    without this a webhook endpoint answers 200, does nothing, and leaves no trace of why: the
+    operator sees only the access-log line. That is precisely the failure this service must be able to
+    explain.
+
+    Level comes from `LOG_LEVEL` (default INFO). No-ops if the root logger is already configured, so
+    a host application's logging setup wins.
+    """
+    if logging.getLogger().handlers:
+        return
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        stream=sys.stdout,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    )
+
+
 def create_app(registry_path: Path | None = None) -> FastAPI:
+    configure_logging()
     path = registry_path or _REGISTRY_PATH
     composition = None
     if path.is_file():
