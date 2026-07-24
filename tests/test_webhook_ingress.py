@@ -467,3 +467,64 @@ def test_nothing_is_admitted_merely_by_passing_ingress(ingress, repository) -> N
 
     assert ingress.handle(body=body, headers=headers, payload=payload).accepted
     assert repository.events.count() == 0, "ingress must not record the key by itself"
+
+
+# -- Confluence Automation cannot supply a page version (no such smart value) -------------------
+
+
+def _page_payload_without_version() -> dict:
+    """What a Confluence Automation rule can actually send: no version, because none exists."""
+    return {
+        "webhookEvent": "page_created",
+        "page": {"id": "page-1", "title": "final_PRD_Widget", "version": {"number": ""}},
+    }
+
+
+def test_a_page_event_without_a_version_still_parses() -> None:
+    """Requiring the version made the product untriggerable: no rule could ever satisfy it."""
+    from app.webhooks.events import parse_event
+
+    event = parse_event(_page_payload_without_version())
+
+    assert event.page_id == "page-1"
+    assert event.version_number is None
+    assert event.needs_version_resolution is True
+
+
+def test_an_unversioned_page_event_yields_no_dedupe_key() -> None:
+    """The empty marker must never be keyed.
+
+    One key per page forever would store the first edit and drop every later one as a duplicate,
+    silently disabling the EH-04 rename re-entry the marker exists to enable.
+    """
+    from app.domain.events import ConfluencePageEvent, EventType
+
+    event = ConfluencePageEvent(
+        event_type=EventType.CONFLUENCE_PAGE_CREATED,
+        page_id="page-1",
+        version_number=None,
+        title="final_PRD_Widget",
+    )
+
+    assert event.version_marker == ""
+    assert event.needs_version_resolution is True
+
+
+def test_a_resolved_version_restores_a_distinct_key_per_edit() -> None:
+    """Once resolved, each version keys differently — which is what lets a rename re-enter."""
+    from dataclasses import replace
+
+    from app.domain.dedupe import dedupe_key_for
+    from app.domain.events import ConfluencePageEvent, EventType
+
+    base = ConfluencePageEvent(
+        event_type=EventType.CONFLUENCE_PAGE_UPDATED,
+        page_id="page-1",
+        version_number=None,
+        title="final_PRD_Widget",
+    )
+    v2 = dedupe_key_for("tenant_one", replace(base, version_number=2))
+    v3 = dedupe_key_for("tenant_one", replace(base, version_number=3))
+
+    assert v2.value != v3.value
+    assert v2.version_marker == "2" and v3.version_marker == "3"

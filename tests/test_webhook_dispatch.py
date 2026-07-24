@@ -199,3 +199,81 @@ def test_find_prd_by_ticket_resolves_across_ticket_fields() -> None:
     )
     assert _find_prd_by_ticket(repository, "TESTMAIN-2") == "page-1"
     assert _find_prd_by_ticket(repository, "UNKNOWN-9") is None
+
+
+# -- resolving the version Confluence Automation cannot send (AD-9) -----------------------------
+
+
+class FakeConfluenceForVersion:
+    """Returns the page's authoritative version, as `_resolve_version` fetches it."""
+
+    def __init__(self, version: int = 7, title: str = "final_PRD_Widget") -> None:
+        self.version, self.title, self.calls = version, title, 0
+
+    async def get_page(self, page_id, *, with_body=True):
+        from app.domain.atlassian import ConfluencePage
+
+        self.calls += 1
+        return ConfluencePage(
+            id=page_id, title=self.title, version=self.version, parent_id="folder-source-1"
+        )
+
+
+def make_with_confluence(version: int = 7, tenant_state: PrdState | None = None):
+    composition, tenant = make(tenant_state)
+    confluence = FakeConfluenceForVersion(version)
+
+    class Adapters:
+        pass
+
+    adapters = Adapters()
+    adapters.confluence = confluence
+    composition._adapters_for = lambda _t: adapters  # type: ignore[method-assign]
+    return composition, tenant, confluence
+
+
+def unversioned_page_event(page_id="page-1"):
+    from app.domain.events import ConfluencePageEvent, EventType
+
+    return ConfluencePageEvent(
+        event_type=EventType.CONFLUENCE_PAGE_CREATED,
+        page_id=page_id,
+        version_number=None,
+        title="final_PRD_Widget",
+        container_id="folder-source-1",
+    )
+
+
+async def test_an_unversioned_page_event_is_admitted_after_resolving_the_version() -> None:
+    """The real Automation payload carries no version; the run must still start."""
+    composition, tenant, confluence = make_with_confluence(version=7)
+
+    await _dispatch(composition, Accepted(event=unversioned_page_event(), tenant=tenant))
+
+    assert confluence.calls == 1, "the version should be fetched once"
+    assert ("advance", "page-1") in composition.orchestrator.calls
+    assert composition.repository.state.get("page-1") is not None
+
+
+async def test_a_redelivery_of_the_same_unversioned_event_is_dropped() -> None:
+    """Two deliveries of the same page version must not start two runs (AD-9)."""
+    composition, tenant, confluence = make_with_confluence(version=7)
+
+    await _dispatch(composition, Accepted(event=unversioned_page_event(), tenant=tenant))
+    composition.orchestrator.calls.clear()
+    await _dispatch(composition, Accepted(event=unversioned_page_event(), tenant=tenant))
+
+    assert composition.orchestrator.calls == [], "the duplicate started a second run"
+
+
+async def test_a_later_edit_of_the_same_page_re_enters(tmp_path) -> None:
+    """EH-04: a rename arrives as a NEW version and must re-enter, not be swallowed as a duplicate."""
+    composition, tenant, confluence = make_with_confluence(version=7)
+
+    await _dispatch(composition, Accepted(event=unversioned_page_event(), tenant=tenant))
+    composition.orchestrator.calls.clear()
+
+    confluence.version = 8  # the page was renamed → new version
+    await _dispatch(composition, Accepted(event=unversioned_page_event(), tenant=tenant))
+
+    assert ("advance", "page-1") in composition.orchestrator.calls, "the rename did not re-enter"

@@ -127,6 +127,21 @@ class WebhookIngress:
 
         # 4. Dedupe-check (AD-9). Advisory: the authoritative guard is the UNIQUE constraint at
         #    admission, since another delivery may arrive between this check and that write.
+        #
+        #    A page event whose version the trigger could not supply is accepted WITHOUT a key: the
+        #    router resolves the version from the page and keys it there (AD-9's components are
+        #    unchanged, only the moment they are all known). Emitting a key with an empty version
+        #    marker instead would record one key for the page forever, so the first edit would be
+        #    stored and every later one dropped as a duplicate — silently disabling EH-04 re-entry.
+        if getattr(event, "needs_version_resolution", False):
+            return IngressResult(
+                IngressOutcome.ACCEPTED,
+                f"{routing.reason}; version pending resolution",
+                event=event,
+                tenant=routing.tenant,
+                dedupe_key=None,
+            )
+
         key = dedupe_key_for(routing.tenant.project_id, event)
         if self._repository.events.is_processed(key):
             return IngressResult(

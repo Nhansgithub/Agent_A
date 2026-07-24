@@ -55,6 +55,20 @@ def _first(payload: dict[str, Any], *paths: str) -> Any:
     return None
 
 
+def _optional_int(value: Any) -> int | None:
+    """Parse a version that may be absent, empty, or an unresolved smart-value placeholder.
+
+    An Automation rule renders an unknown smart value as an empty string, so `""` must read as
+    "unknown" rather than crashing the parse.
+    """
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return int(str(value).strip())
+    except ValueError:
+        return None
+
+
 def _require(value: Any, field_name: str) -> str:
     if value is None or str(value) == "":
         raise UnsupportedEvent(f"webhook payload is missing required field {field_name!r}")
@@ -73,10 +87,14 @@ def parse_confluence_page_event(payload: dict[str, Any]) -> ConfluencePageEvent:
     page = payload.get("page") if isinstance(payload.get("page"), dict) else payload
     version = _first(page, "version.number", "version") or _first(payload, "page.version.number")
 
+    # The version is OPTIONAL, not required. Confluence Cloud Automation — the only way to trigger on
+    # a page event without a Connect app — exposes no page-version smart value, so a rule physically
+    # cannot send one. Rejecting the event here would make the product untriggerable; instead the
+    # router resolves the version from the page before the AD-9 key is built.
     return ConfluencePageEvent(
         event_type=event_type,
         page_id=_require(_first(page, "id", "contentId"), "page.id"),
-        version_number=int(_require(version, "page.version.number")),
+        version_number=_optional_int(version),
         title=str(_first(page, "title") or ""),
         creator_account_id=_first(
             page,

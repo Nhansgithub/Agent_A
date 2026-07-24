@@ -44,7 +44,13 @@ class ConfluencePageEvent:
 
     event_type: EventType
     page_id: str
-    version_number: int
+    version_number: int | None
+    """The page's version. ``None`` when the trigger could not supply it — **Confluence Cloud
+    Automation has no page-version smart value at all**, and an Automation rule is the only way to
+    trigger on a page event without writing a Connect app. The webhook router resolves it from the
+    page itself before the AD-9 key is computed, so an unversioned event never reaches the dedupe
+    store; see :meth:`version_marker`."""
+
     title: str
     creator_account_id: str | None = None
     """PRD §13 Q4 / AD-12 — the Uploading PM for an FR-02a rename task. PAYLOAD-UNVERIFIED: if the
@@ -65,7 +71,18 @@ class ConfluencePageEvent:
 
     @property
     def version_marker(self) -> str:
-        return str(self.version_number)
+        """Empty when the version is unknown — the caller must resolve it before keying.
+
+        Keying on an empty marker would be actively harmful: every future edit of the page would
+        produce the *same* key, so the first rename would be recorded and every later one dropped as
+        a duplicate, silently killing EH-04 re-entry. `WebhookIngress` therefore refuses to emit a
+        dedupe key for an unversioned page event.
+        """
+        return "" if self.version_number is None else str(self.version_number)
+
+    @property
+    def needs_version_resolution(self) -> bool:
+        return self.version_number is None
 
 
 @dataclass(frozen=True, slots=True)

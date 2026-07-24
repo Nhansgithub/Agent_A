@@ -107,22 +107,56 @@ async def _dispatch(composition: Composition, result) -> None:
 async def _dispatch_page(composition: Composition, event: ConfluencePageEvent, tenant):
     """A page event admits a new PRD (or re-enters a renamed one)."""
     repository = composition.repository
+    from app.domain.dedupe import dedupe_key_for
+    from app.domain.state import PrdState
+
+    event = await _resolve_version(composition, event, tenant)
+    key = dedupe_key_for(tenant.project_id, event)
+
     existing = repository.state.get(event.page_id)
     if existing is None:
-        from app.domain.dedupe import dedupe_key_for
-        from app.domain.state import PrdState
-
         # Admit the new PRD atomically with its dedupe key (AD-9).
-        key = dedupe_key_for(tenant.project_id, event)
         admitted = repository.admit(
             key, PrdState(prd_id=event.page_id, project_id=tenant.project_id, prd_title=event.title)
         )
         if admitted is None:
             return None  # lost the admission race to a concurrent duplicate
+    elif not repository.record_event_for(key, event.page_id):
+        # This exact page version was already handled — a redelivery, or an edit we have seen.
+        logger.info("page event %s already processed; dropped as duplicate", key.value)
+        return None
+
     # Hand the parsed event to the context so detection sees the true creator/labels/container
     # without a live re-fetch (and correctly authored-by the real uploader, not the agent).
     composition.stash_event(event.page_id, event)
     return await composition.orchestrator.advance(event.page_id)
+
+
+async def _resolve_version(composition: Composition, event: ConfluencePageEvent, tenant):
+    """Fill in a page version the trigger could not supply (AD-9).
+
+    Confluence Cloud Automation exposes **no page-version smart value**, and an Automation rule is
+    the only way to trigger on a page event without a Connect app — so in practice every real page
+    event arrives unversioned. One cheap `GET page` recovers the authoritative value, which is
+    strictly better than trusting a payload field anyway: it is the version Confluence actually
+    holds, so a redelivery and the AD-22 reconciler agree on the same key.
+
+    Runs only after the signature check has passed (AD-8), so an unauthenticated request still costs
+    nothing.
+    """
+    if not event.needs_version_resolution:
+        return event
+    from dataclasses import replace
+
+    page = await composition._adapters_for(tenant).confluence.get_page(
+        event.page_id, with_body=False
+    )
+    return replace(
+        event,
+        version_number=page.version,
+        title=event.title or page.title,
+        container_id=event.container_id or page.parent_id,
+    )
 
 
 async def _dispatch_comment(composition: Composition, event: JiraCommentEvent, tenant):
