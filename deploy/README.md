@@ -11,6 +11,22 @@ The operational envelope is a first-class constraint (AD-21, PRD §15). The sing
 - A container registry the Droplet can pull from (GHCR / Docker Hub / DO Container Registry).
 - `config/registry.yaml` and `.env` filled in (SETUP-GUIDE.md Parts 1-6).
 
+## Routine changes (after the first deploy)
+
+Once the box is up, shipping a code change is **two commands**:
+
+```bash
+git push                    # master push -> GitHub Actions builds and pushes :latest
+./deploy/redeploy.sh        # pull + restart + verify (waits for the build to finish first)
+```
+
+`redeploy.sh` verifies rather than assumes: it polls `/health` on the box, fails the deploy if
+`config` is not `loaded` (a missing config mount leaves the service alive but deaf), and then
+re-checks through Caddy from the public internet. Deploy a specific build with
+`./deploy/redeploy.sh v0.1.4` or `./deploy/redeploy.sh sha-1a2b3c4`.
+
+Tagging is optional now — `v*` tags still build and give you an immutable tag to roll back to.
+
 ## 1. Build off the box and push
 
 **Recommended: let GitHub Actions do it.** `.github/workflows/build-image.yml` already builds this

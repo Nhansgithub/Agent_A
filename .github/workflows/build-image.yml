@@ -7,6 +7,9 @@ name: build-image
 
 on:
   push:
+    # `master` keeps :latest current, so a routine change needs no tag ceremony. Tags still build
+    # and additionally publish an immutable `:vX.Y.Z` you can roll back to.
+    branches: ["master"]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -30,11 +33,20 @@ jobs:
       # "repository name must be lowercase".
       - name: Lowercase the image name
         id: image
-        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          # Second, immutable tag. A release tag keeps its own name; a branch build is identified by
+          # commit, because tagging every master build ":master" would give you a moving label with
+          # nothing to roll back to.
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=sha-$(echo '${{ github.sha }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Dockerfile
           push: true
-          tags: ${{ steps.image.outputs.name }}:latest,${{ steps.image.outputs.name }}:${{ github.ref_name }}
+          tags: ${{ steps.image.outputs.name }}:latest,${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
