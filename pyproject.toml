@@ -141,6 +141,11 @@ forbidden_modules = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Put the repo root on sys.path explicitly. 16 test modules do `from tests.conftest import ...`, and
+# without this that works only when pytest is invoked as `python -m pytest` (which happens to put the
+# CWD on sys.path). The `pytest` console script does not — so CI, which runs it that way, failed
+# collection on every one of those modules while the identical tree passed locally.
+pythonpath = ["."]
 filterwarnings = ["error::DeprecationWarning:app.*"]
 
 [tool.ruff]
