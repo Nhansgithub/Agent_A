@@ -4,10 +4,15 @@
 # /admin/* endpoints are deliberately NOT proxied — they are reached over localhost by the cron
 # reconciler (AD-22), never from the internet.
 #
-# Replace `agent.example.com` with your domain (or use the Droplet IP with `tls internal` for a
-# quick demo without a domain). Caddy auto-provisions a Let's Encrypt cert for a real domain.
+# The domain must already resolve to this Droplet when Caddy starts: Let's Encrypt proves ownership
+# over HTTP-01, and repeated failures for a wrong name are rate-limited.
+#
+# This uses the apex `poetroastery.com`, which already has an A record on the Droplet. Note that it
+# claims the whole domain: everything except /webhooks/* and /health answers 404, so if the apex is
+# ever wanted for a real site, move this to a subdomain (e.g. `agent.poetroastery.com`) and add the
+# matching A record.
 
-agent.example.com {
+poetroastery.com {
 	encode gzip
 
 	# Only the webhook endpoint is public. Everything else (docs, admin) is not exposed.
