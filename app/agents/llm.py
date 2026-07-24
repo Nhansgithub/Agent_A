@@ -131,7 +131,6 @@ class LlmClient:
         prompt: str,
         metadata: CallMetadata,
         max_tokens: int | None = None,
-        temperature: float | None = None,
     ) -> LlmResponse:
         """Run one completion, traced.
 
@@ -140,6 +139,11 @@ class LlmClient:
             system: the role's system prompt, typically assembled with its `SKILL.md`.
             prompt: the user-turn content.
             metadata: correlation id, prd_id, agent role, and `review_round` for the trace.
+
+        No `temperature` / `top_p` / `top_k`: the pinned models (Claude Sonnet 5, Opus 4.8) **reject**
+        sampling parameters with a 400 — they are removed on the Claude 5 family and Opus 4.7+.
+        Determinism where we want it (the Classifier, the Feedback interpreter) is steered by the
+        prompt/rubric instead, per those models' guidance. Recorded as D-15.
         """
         span_name = f"{metadata.agent_role}.complete"
 
@@ -158,7 +162,6 @@ class LlmClient:
                     max_tokens=max_tokens or self._max_tokens,
                     system=system,
                     messages=[{"role": "user", "content": prompt}],
-                    **({"temperature": temperature} if temperature is not None else {}),
                 )
             except Exception as exc:
                 raise self._normalize(exc, model, metadata) from exc

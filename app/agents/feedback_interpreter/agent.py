@@ -50,7 +50,6 @@ class FeedbackInterpreter:
             system=load_skill(_ROLE),
             prompt=self._prompt(comment_text, awaiting_reply, draft_markdown, prd_markdown),
             metadata=metadata,
-            temperature=0,
         )
         return self._parse(response.text)
 

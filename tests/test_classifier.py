@@ -90,7 +90,9 @@ async def test_the_classifier_uses_its_pinned_model() -> None:
     agent = ClassifierAgent(LlmClient("k", client=fake), model="claude-sonnet-5")
     await classify(agent)
     assert fake.calls[0]["model"] == "claude-sonnet-5"
-    assert fake.calls[0]["temperature"] == 0, "a classification bar wants determinism"
+    # No `temperature`: the pinned models reject sampling params (D-15). Determinism is steered by
+    # the rubric in SKILL.md, not a knob.
+    assert "temperature" not in fake.calls[0]
 
 
 async def test_the_page_body_is_included_in_the_prompt() -> None:

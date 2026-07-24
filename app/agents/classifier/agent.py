@@ -65,12 +65,13 @@ class ClassifierAgent:
         self, *, title: str, body_markdown: str, metadata: CallMetadata
     ) -> ClassificationResult:
         """Classify one page. `body_markdown` is the page converted from storage format."""
+        # Determinism comes from the rubric in SKILL.md, not a temperature knob — the pinned models
+        # reject sampling params (D-15).
         response = await self._llm.complete(
             model=self._model,
             system=load_skill(_ROLE),
             prompt=self._prompt(title, body_markdown),
             metadata=metadata,
-            temperature=0,  # a classification bar wants determinism, not variety
         )
         return self._parse(response.text)
 
