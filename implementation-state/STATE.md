@@ -29,24 +29,28 @@ Run it later with `.venv/bin/python scripts/run_classifier_eval.py`.
 
 ## ▶ Next Action
 
-**Epic 3 — UserDoc Authoring & Draft Publication.** The flow currently walks to `drafted` and stops
-there (no handler yet). Epic 3 fills `Stage.DRAFTED`'s handler and the review-request framing.
+**Epic 4 — Human Review & Revision Loop.** The flow parks at `awaiting_review`. Epic 4 handles what
+the Reviewer PM does next: leave feedback (→ revise loop) or move the ticket to Done (→ PASS).
 
-Stories in order (all critical-path):
-- **3.1** Author agent drafts the first UserDoc (structure via prompt + `SKILL.md`, no fixed template).
-- **3.2** One self-critique pass (draft → critique → single revision). A *drafting aid only* — never
-  an acceptance gate; the human PM PASS is the sole quality gate (AD-17).
-- **3.3** Publish the draft to the Confluence draft folder: create page, v1 move into the draft
-  folder, stamp `agent-generated` label + `prd_id` content property, record `userdoc_page_id`
-  (find-or-create by marker for AD-11 idempotency).
-- **3.4** Create the Review ticket in the Review project assigned to `pm_account_id`; advance to
-  `awaiting_review` (the run now parks on the PM — AD-15).
-- **3.5** Post the framed review-request comment (ADF): tag the PM, request the §6.2 structured
-  format, "put yourself in the users' shoes", and the Done-only pass rule.
+Stories:
+- **4.1** (critical) Ingest a PM comment; the Feedback interpreter returns a typed
+  `FeedbackDecision{route, trigger, assumption}` in `app/domain/`. Orchestrator routing off it is
+  deterministic + unit-tested; only the decision-producing LLM is eval-tested (AD-16).
+- **4.2** (critical) Apply structured feedback → revised draft + change summary + re-request;
+  `review_round++`, per-round cost in LangSmith (NFR-09). Uses `Author.revise` + `Publisher.update_draft`.
+- **4.3** (critical) Detect PASS: the PM's Done transition on the Review ticket → advance to `passed`.
+  The agent never transitions it (AD-15). This is an `issue_updated` webhook path, not a stage handler.
+- **4.4** (hardening) Structure-confirmation sub-loop for plain-language feedback → `awaiting_
+  structure_confirm`, block until the PM confirms (EH-08).
+- **4.5** (hardening) Bounded clarification sub-loop — the 4 enumerated FR-08 triggers only; else
+  proceed with a stated assumption. → `awaiting_clarification` (EH-08).
+- **4.6** (hardening) Late-feedback-after-Done ignored (EH-06); non-Done terminal transitions park (EH-09).
 
-Seams ready: `Author` uses `LlmClient.complete(model=system.models.author, ...)`; publication uses
-`ConfluenceAdapter.create_page`/`move_page`/`stamp_agent_generated`/`set_content_property` and
-`find_page_by_prd_marker`; the Review ticket uses `TicketManager` + `adf.mention`.
+Key design point: gate detection (4.3) and feedback ingest (4.1) are driven by **Jira webhooks**, not
+by the graph's advancing stages. The orchestrator's advancing-stage set already stops at
+`awaiting_review`; a comment or transition webhook is what re-enters the flow. This needs a small
+"apply an external event to a parked run" path alongside `advance()` — design it in `app/orchestrator/`
+so the webhook layer (Epic 1) feeds PM comments/transitions to it.
 
 ## Environment notes
 

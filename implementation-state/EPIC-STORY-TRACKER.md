@@ -9,13 +9,13 @@ blocked) · `BLOCKED` (cannot start — see BLOCKERS.md)
 
 **Order of work:** epic 1 → 6; within an epic, `critical-path` before `hardening`.
 
-**Progress: 18 / 39 DONE** — **Epics 1 & 2 complete.** Test suite: **341 passed**, ruff clean, **5/5 import-linter contracts kept**.
+**Progress: 23 / 39 DONE** — **Epics 1-3 complete.** Test suite: **363 passed**, ruff clean, **5/5 import-linter contracts kept**.
 
 | | Epic | Stories | Done |
 |---|---|---|---|
 | 1 | Multi-Tenant Foundation & Deployable Skeleton | 10 | **10 ✅** |
 | 2 | PRD Detection & Confirmation | 8 | **8 ✅** |
-| 3 | UserDoc Authoring & Draft Publication | 5 | 0 |
+| 3 | UserDoc Authoring & Draft Publication | 5 | **5 ✅** |
 | 4 | Human Review & Revision Loop | 6 | 0 |
 | 5 | Approval & Publishing | 3 | 0 |
 | 6 | Resilience, Recovery & Operations | 7 | 0 |
@@ -57,11 +57,11 @@ round-trip Atlassian and LLM calls, advance explicit stages. Everything downstre
 
 | ID | Story | Tag | Governed by | Status | Evidence |
 |---|---|---|---|---|---|
-| 3.1 | Author agent drafts the first UserDoc from the PRD | critical-path | AD-17 | TODO | |
-| 3.2 | Author self-critique pass (draft → critique → one revision) | critical-path | AD-17 | TODO | |
-| 3.3 | Publish the draft to the Confluence draft folder (idempotent, self-stamped) | critical-path | AD-14, AD-10, AD-11 | TODO | |
-| 3.4 | Create the Review ticket assigned to the Reviewer PM | critical-path | AD-11, AD-15 | TODO | |
-| 3.5 | Post the framed review-request comment | critical-path | AD-7, AD-15 | TODO | |
+| 3.1 | Author agent drafts the first UserDoc from the PRD | critical-path | AD-17 | **DONE** | `app/agents/author/{agent,SKILL.md}`; structure via prompt, model from config. |
+| 3.2 | Author self-critique pass (draft → critique → one revision) | critical-path | AD-17 | **DONE** | one draft+critique call each; drafting aid only, not a gate (test asserts exactly 2 LLM calls). |
+| 3.3 | Publish the draft to the Confluence draft folder (idempotent, self-stamped) | critical-path | AD-14, AD-10, AD-11 | **DONE** | `app/agents/publisher.py` + `markdown_to_storage`; create/adopt/reuse; v1 move; label + prd_id stamp. |
+| 3.4 | Create the Review ticket assigned to the Reviewer PM | critical-path | AD-11, AD-15 | **DONE** | `TicketManager.create_review_ticket` + find-or-create by marker; parks at awaiting_review. |
+| 3.5 | Post the framed review-request comment | critical-path | AD-7, AD-15 | **DONE** | `app/agents/review_request.py`; real @mention, §6.2 format, users'-shoes, Done-only rule (all asserted). |
 
 ## Epic 4 — Human Review & Revision Loop
 

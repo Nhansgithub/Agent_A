@@ -16,6 +16,9 @@ Minor formatting loss is explicitly acceptable for the demo (PRD §13 Q5). What 
 
 from __future__ import annotations
 
+import html
+import re
+
 from bs4 import BeautifulSoup, NavigableString
 from markdownify import MarkdownConverter
 
@@ -165,3 +168,127 @@ def _tidy(markdown: str) -> str:
             continue
         tidied.append(line)
     return "\n".join(tidied).strip() + "\n"
+
+
+# ---------------------------------------------------------------------------------------------
+# Markdown -> Confluence storage format (FR-06 — publishing the Author's draft).
+#
+# Confluence Cloud has no "markdown" body representation, so a draft written in Markdown must be
+# converted to storage-format XHTML to become a page. This handles exactly the subset the Author's
+# SKILL.md constrains its output to (headings, paragraphs, bullet/ordered lists, bold/italic/inline
+# code, fenced code blocks, links). Minor formatting loss on anything outside that subset is
+# acceptable for the demo (PRD §13 Q5).
+# ---------------------------------------------------------------------------------------------
+
+_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+_UL_ITEM = re.compile(r"^[-*]\s+(.*)$")
+_OL_ITEM = re.compile(r"^\d+[.)]\s+(.*)$")
+_FENCE = re.compile(r"^```(\w*)\s*$")
+_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_BOLD = re.compile(r"\*\*([^*]+)\*\*")
+_ITALIC = re.compile(r"(?<![*\w])\*([^*]+)\*(?![*\w])")
+_CODE = re.compile(r"`([^`]+)`")
+
+
+def _inline(text: str) -> str:
+    """Convert inline spans, escaping first so user text can never inject storage markup."""
+    escaped = html.escape(text, quote=False)
+    # Protect inline code from bold/italic processing by handling it first with a placeholder.
+    codes: list[str] = []
+
+    def _stash_code(match: re.Match[str]) -> str:
+        codes.append(f"<code>{match.group(1)}</code>")
+        return f"\x00{len(codes) - 1}\x00"
+
+    escaped = _CODE.sub(_stash_code, escaped)
+    escaped = _BOLD.sub(r"<strong>\1</strong>", escaped)
+    escaped = _ITALIC.sub(r"<em>\1</em>", escaped)
+    escaped = _LINK.sub(
+        lambda m: f'<a href="{html.escape(m.group(2), quote=True)}">{m.group(1)}</a>', escaped
+    )
+    for index, code_html in enumerate(codes):
+        escaped = escaped.replace(f"\x00{index}\x00", code_html)
+    return escaped
+
+
+def markdown_to_storage(markdown: str) -> str:
+    """Convert a Markdown draft to Confluence storage format (XHTML).
+
+    Deliberately line-based and small: the Author produces a constrained Markdown subset, so a full
+    CommonMark parser would be a dependency and a memory cost (AD-21) buying fidelity the demo does
+    not need. Unrecognised lines degrade to paragraphs rather than being dropped.
+    """
+    lines = (markdown or "").replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    paragraph: list[str] = []
+    list_stack: list[str] = []  # "ul" / "ol", innermost last
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            out.append(f"<p>{_inline(' '.join(paragraph))}</p>")
+            paragraph.clear()
+
+    def close_lists() -> None:
+        while list_stack:
+            out.append(f"</{list_stack.pop()}>")
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        fence = _FENCE.match(stripped)
+        if fence:
+            flush_paragraph()
+            close_lists()
+            language = fence.group(1)
+            body: list[str] = []
+            i += 1
+            while i < len(lines) and not _FENCE.match(lines[i].strip()):
+                body.append(lines[i])
+                i += 1
+            macro = '<ac:structured-macro ac:name="code">'
+            if language:
+                macro += f'<ac:parameter ac:name="language">{html.escape(language)}</ac:parameter>'
+            macro += f"<ac:plain-text-body><![CDATA[{chr(10).join(body)}]]></ac:plain-text-body>"
+            macro += "</ac:structured-macro>"
+            out.append(macro)
+            i += 1
+            continue
+
+        if not stripped:
+            flush_paragraph()
+            close_lists()
+            i += 1
+            continue
+
+        heading = _HEADING.match(stripped)
+        if heading:
+            flush_paragraph()
+            close_lists()
+            level = len(heading.group(1))
+            out.append(f"<h{level}>{_inline(heading.group(2).strip())}</h{level}>")
+            i += 1
+            continue
+
+        ul = _UL_ITEM.match(stripped)
+        ol = _OL_ITEM.match(stripped)
+        if ul or ol:
+            flush_paragraph()
+            wanted = "ul" if ul else "ol"
+            if not list_stack or list_stack[-1] != wanted:
+                close_lists()
+                out.append(f"<{wanted}>")
+                list_stack.append(wanted)
+            item = (ul or ol).group(1)
+            out.append(f"<li>{_inline(item)}</li>")
+            i += 1
+            continue
+
+        close_lists()
+        paragraph.append(stripped)
+        i += 1
+
+    flush_paragraph()
+    close_lists()
+    return "".join(out)

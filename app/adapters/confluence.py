@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.adapters.http import AtlassianClient
-from app.adapters.markdown import storage_to_markdown
+from app.adapters.markdown import markdown_to_storage, storage_to_markdown
 from app.config.constants import AGENT_GENERATED_LABEL, PRD_CORRELATION_PROPERTY
 from app.domain.atlassian import ConfluencePage
 from app.domain.errors import AgentError
@@ -268,6 +268,11 @@ class ConfluenceAdapter:
     def storage_to_markdown(storage_html: str) -> str:
         """Confluence storage format → Markdown for the FR-15 `.md` export."""
         return storage_to_markdown(storage_html)
+
+    @staticmethod
+    def markdown_to_storage(markdown: str) -> str:
+        """Markdown draft → Confluence storage format, for publishing the Author's draft (FR-06)."""
+        return markdown_to_storage(markdown)
 
     # -- internals ---------------------------------------------------------------------------
 

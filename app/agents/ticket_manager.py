@@ -258,7 +258,96 @@ class TicketManager:
             )
         return adf.doc(*blocks)
 
+    # -- FR-06/FR-13: create a ticket + post a comment -----------------------------------------
+
+    async def create_review_ticket(
+        self, *, tenant: TenantConfig, prd_id: str, userdoc_title: str, draft_page_url: str
+    ) -> JiraIssue:
+        """Create the Review ticket in the Review project, assigned to the Reviewer PM (FR-06).
+
+        The agent never transitions this ticket — the PM moving it to Done is the sole PASS signal
+        (AD-15). The `prd_id` marker lets a resume adopt it instead of creating a second one (AD-11).
+        """
+        return await self._jira.create_issue(
+            project_key=tenant.jira_review_project_key,
+            summary=f"Review UserDoc: {userdoc_title}",
+            description=self._review_description(userdoc_title, draft_page_url),
+            issue_type="Task",
+            assignee_account_id=tenant.pm_account_id,
+            prd_id=prd_id,
+        )
+
+    async def create_publishing_ticket(
+        self, *, tenant: TenantConfig, prd_id: str, userdoc_title: str, draft_page_url: str
+    ) -> JiraIssue:
+        """Create the Publishing ticket in the Main project for the Head of Product (FR-13).
+
+        Also a human gate — the agent never transitions it (AD-15).
+        """
+        return await self._jira.create_issue(
+            project_key=tenant.jira_main_project_key,
+            summary=f"Approve & publish UserDoc: {userdoc_title}",
+            description=self._publishing_description(userdoc_title, draft_page_url),
+            issue_type="Task",
+            assignee_account_id=tenant.head_of_product_account_id,
+            reporter_account_id=tenant.head_of_product_account_id,
+            prd_id=prd_id,
+        )
+
+    async def find_ticket_by_marker(self, project_key: str, prd_id: str) -> JiraIssue | None:
+        """Adopt-orphan helper for the Review/Publishing tickets (AD-11)."""
+        return await self._jira.find_issue_by_prd_marker(project_key, prd_id)
+
+    async def comment(self, issue_key: str, body: dict) -> str:
+        """Post an ADF comment (FR-07, FR-11, FR-13). Body must be an ADF document."""
+        return await self._jira.add_comment(issue_key, body)
+
     # -- descriptions --------------------------------------------------------------------------
+
+    @staticmethod
+    def _review_description(title: str, url: str) -> dict:
+        from app.domain import adf
+
+        return adf.doc(
+            adf.paragraph(
+                adf.text("Review ticket for the UserDoc draft "),
+                adf.strong(title),
+                adf.text("."),
+            ),
+            adf.paragraph(
+                adf.text("Draft: "),
+                adf.link("open the draft", url) if url else adf.text("(link unavailable)"),
+            ),
+            adf.paragraph(
+                adf.text(
+                    "See the pinned comment for how to give feedback and how to approve. Moving this "
+                    "ticket to Done is the only way to pass the draft."
+                )
+            ),
+        )
+
+    @staticmethod
+    def _publishing_description(title: str, url: str) -> dict:
+        from app.domain import adf
+
+        return adf.doc(
+            adf.paragraph(
+                adf.text("The Reviewer PM has passed the UserDoc "),
+                adf.strong(title),
+                adf.text(". It is ready to publish to production."),
+            ),
+            adf.paragraph(
+                adf.text("Passed draft: "),
+                adf.link("open the draft", url) if url else adf.text("(link unavailable)"),
+            ),
+            adf.paragraph(
+                adf.strong("To approve publishing: "),
+                adf.text(
+                    "transition this ticket to Done. That is the sole approval signal — nothing is "
+                    "published until you do."
+                ),
+            ),
+        )
 
     @staticmethod
     def _tracking_description(prd_name: str, prd_url: str) -> dict:

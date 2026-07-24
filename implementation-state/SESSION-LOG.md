@@ -320,3 +320,34 @@ is DONE and offline-tested.
 
 **Next:** Epic 3 — UserDoc Authoring & Draft Publication (the Author agent, self-critique, draft
 publication, Review ticket, framed review request).
+
+---
+
+## 2026-07-24 · Session 1 (cont.) — Epic 3: UserDoc Authoring & Draft Publication · **COMPLETE (5/5)**
+
+- **Author** (`app/agents/author/`, S3.1/3.2): drafts from the PRD with structure decided by its
+  `SKILL.md` (no fixed template), then runs **exactly one** self-critique pass — draft call + critique
+  call, asserted at 2 LLM calls. The self-critique is a drafting aid, never a gate (AD-17). `revise()`
+  applies PM feedback with no self-critique (the human is already the reviewer). Model from config.
+- **markdown_to_storage** (`app/adapters/markdown.py`): the reverse of the FR-15 export converter —
+  Confluence Cloud has no markdown body representation, so a Markdown draft must become storage-format
+  XHTML to be a page. A small line-based converter over the Author's constrained subset rather than a
+  CommonMark dependency (AD-21). Escapes user text first, so a PRD with angle brackets can't inject
+  markup (tested).
+- **Publisher** (`app/agents/publisher.py`, S3.3): create / adopt-orphan / reuse-known-id for the
+  draft page (AD-11), placed in the draft folder via the v1 move (AD-14), stamped with the
+  `agent-generated` label + `prd_id` content property (AD-10/AD-11).
+- **Review ticket + framed request** (S3.4/3.5): `TicketManager.create_review_ticket` (find-or-create
+  by marker), and `app/agents/review_request.py` building the FR-07 comment — a **real @mention**
+  (not plain text that notifies nobody), the §6.2 structured format, the users'-shoes framing, and the
+  Done-only pass rule. All four requirements are asserted by test, because the wording is a product
+  decision that an LLM could quietly drop.
+- **Orchestration** (`handlers_authoring.py`): fills `Stage.DRAFTED` — draft → publish → Review ticket
+  → framed comment → **park at `awaiting_review`** (AD-15). Re-run adopts the recorded page/ticket ids
+  rather than duplicating (AD-11), proven by test.
+
+The flow now walks `detected → confirmed → prd_ticket_done → drafted → awaiting_review` and parks on
+the PM. **Suite: 363 passed. ruff clean. 5/5 contracts.**
+
+**Next:** Epic 4 — Human Review & Revision Loop (feedback ingest + typed routing, apply feedback,
+detect PASS, structure-confirmation and clarification sub-loops, late-feedback handling).
