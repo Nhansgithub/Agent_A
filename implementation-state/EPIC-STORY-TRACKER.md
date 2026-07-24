@@ -9,7 +9,7 @@ blocked) · `BLOCKED` (cannot start — see BLOCKERS.md)
 
 **Order of work:** epic 1 → 6; within an epic, `critical-path` before `hardening`.
 
-**Progress: 29 / 39 DONE** — **Epics 1-4 complete.** Test suite: **390 passed**, ruff clean, **5/5 import-linter contracts kept**.
+**Progress: 32 / 39 DONE** — **Epics 1-5 complete.** Test suite: **402 passed**, ruff clean, **5/5 import-linter contracts kept**.
 
 | | Epic | Stories | Done |
 |---|---|---|---|
@@ -17,7 +17,7 @@ blocked) · `BLOCKED` (cannot start — see BLOCKERS.md)
 | 2 | PRD Detection & Confirmation | 8 | **8 ✅** |
 | 3 | UserDoc Authoring & Draft Publication | 5 | **5 ✅** |
 | 4 | Human Review & Revision Loop | 6 | **6 ✅** |
-| 5 | Approval & Publishing | 3 | 0 |
+| 5 | Approval & Publishing | 3 | **3 ✅** |
 | 6 | Resilience, Recovery & Operations | 7 | 0 |
 
 ---
@@ -78,9 +78,9 @@ round-trip Atlassian and LLM calls, advance explicit stages. Everything downstre
 
 | ID | Story | Tag | Governed by | Status | Evidence |
 |---|---|---|---|---|---|
-| 5.1 | Confirm PASS and create the Publishing ticket for the Head of Product | critical-path | AD-11, AD-15 | TODO | |
-| 5.2 | Head of Product publish gate | critical-path | AD-15 | TODO | |
-| 5.3 | Ordered, idempotent publish transaction (restrict / move / export / complete) | critical-path | AD-18, AD-14, AD-10 | TODO | |
+| 5.1 | Confirm PASS and create the Publishing ticket for the Head of Product | critical-path | AD-11, AD-15 | **DONE** | `handlers_publishing.on_passed`; confirm comment + find-or-create Publishing ticket; parks at awaiting_publish_approval. |
+| 5.2 | Head of Product publish gate | critical-path | AD-15 | **DONE** | `Orchestrator.apply_gate_done` matches `publishing_ticket_key`; wrong ticket / no action → park (no timeout). |
+| 5.3 | Ordered, idempotent publish transaction (restrict / move / export / complete) | critical-path | AD-18, AD-14, AD-10 | **DONE** | `Publisher.publish` — 4 ordered side-effects, each `*_done`-guarded; restriction always includes the agent account; overwrite-safe export. |
 
 ## Epic 6 — Resilience, Recovery & Operations
 

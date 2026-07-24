@@ -388,3 +388,33 @@ revising stage across a crash (AD-11).
 
 **Next:** Epic 5 — Approval & Publishing (Publishing ticket for the Head of Product, the publish
 gate, and the ordered idempotent publish transaction: restrict → move → export → complete).
+
+---
+
+## 2026-07-24 · Session 1 (cont.) — Epic 5: Approval & Publishing · **COMPLETE (3/3)**
+
+- **`on_passed`** (S5.1, FR-13): posts a PASS confirmation to the Review ticket, creates (or adopts by
+  marker) the Publishing ticket for the Head of Product in the Main project, parks at
+  `awaiting_publish_approval`. Tested that it does **not** publish on its own — creating the ticket is
+  the second human gate (AD-15).
+- **Publish gate** (S5.2, FR-14): reuses `apply_gate_done`, matched to `publishing_ticket_key`. A Done
+  on any other ticket, or no action at all, leaves the run parked (no timeout).
+- **`Publisher.publish`** (S5.3, FR-15, AD-18): the four ordered side-effects — restrict → move →
+  export → (orchestrator marks complete) — each guarded by a `*_done` flag from the state record, so a
+  resume skips what already succeeded. The edit restriction **always includes the agent account**
+  (AD-18 — an empty/agent-less allow-list would lock the agent out of its own page; the adapter also
+  refuses an empty list). The `.md` export is overwrite-safe (a resume re-export produces one file,
+  tested). Sub-checkpoints are persisted via the context's progress callback → `update_fields` (a
+  non-`stage` write; the orchestrator still owns `stage = complete`, AD-2).
+
+`on_publishing` records each sub-checkpoint then advances to `complete`, stamping `md_export_path` and
+`completed_at`. A test drives the whole tail: `passed → awaiting_publish_approval → (HoP Done) →
+publishing → complete`.
+
+**Suite: 402 passed. ruff clean. 5/5 contracts.** The entire happy path — detect → classify → draft →
+review loop → PASS → publish gate → publish → complete — now runs end to end against fakes.
+
+**Next:** Epic 6 — Resilience, Recovery & Operations (error surfacing + admin resume, the AD-22
+liveness/reconcile sweep, AD-23 off-box backup, the 1 GB deploy + end-to-end run, config-only
+modifiability check, content-gating flag). This is the epic with the most human/3rd-party gates
+(BLOCKERS B-3/B-4/B-5), so several stories will land PARTIAL pending the live tenant and Droplet.

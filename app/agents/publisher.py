@@ -14,12 +14,16 @@ draft-side page lifecycle so far.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.adapters.confluence import ConfluenceAdapter
 from app.config.constants import PRD_CORRELATION_PROPERTY
 from app.config.schema import TenantConfig
 from app.domain.atlassian import ConfluencePage
+from app.domain.state import utc_now
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +31,21 @@ class PublishedDraft:
     page: ConfluencePage
     created: bool
     """False when an existing draft for this run was adopted rather than created (AD-11)."""
+
+
+@dataclass(frozen=True, slots=True)
+class PublishResult:
+    """The outcome of the FR-15 publish transaction."""
+
+    md_export_path: str | None
+    restriction_applied: bool
+    moved: bool
+    exported: bool
+
+
+#: Called after each publish side-effect to persist its sub-checkpoint (AD-18). Non-`stage` markers,
+#: so it goes through `repository.update_fields` — the orchestrator still owns `stage` (AD-2).
+ProgressCallback = Callable[..., Awaitable[None]]
 
 
 class Publisher:
@@ -98,3 +117,70 @@ class Publisher:
         """
         await self._confluence.stamp_agent_generated(page_id)
         await self._confluence.set_content_property(page_id, PRD_CORRELATION_PROPERTY, prd_id)
+
+    # -- FR-15: the publish transaction (AD-18, AD-14, AD-10) -----------------------------------
+
+    async def publish(
+        self,
+        *,
+        tenant: TenantConfig,
+        prd_id: str,
+        page_id: str,
+        page_title: str,
+        agent_account_id: str,
+        space_admin_account_ids: tuple[str, ...] = (),
+        on_step: ProgressCallback,
+        restriction_done: bool = False,
+        move_done: bool = False,
+        export_done: bool = False,
+        existing_md_path: str | None = None,
+    ) -> PublishResult:
+        """Run the four ordered publish side-effects, each idempotent and sub-checkpointed (AD-18).
+
+        A resume of the `publishing` stage passes the `*_done` flags from the state record, so a
+        side-effect that already completed is skipped and never re-applied. Order is fixed:
+        restrict → move → export → (caller marks complete).
+
+        Args:
+            agent_account_id: the AD-10 cached agent account. **Must** be in the restriction allow-list
+                or the agent locks itself out of the page it just published; the adapter enforces a
+                non-empty list, and this method always includes it.
+            on_step: persists each sub-checkpoint as it completes.
+        """
+        # (1) Confluence edit restriction — restricts *who may edit*, not a content freeze (AD-18).
+        # The agent account and any space admins are always included, so a re-apply cannot lock out.
+        if not restriction_done:
+            allowed = [agent_account_id, *space_admin_account_ids]
+            await self._confluence.set_edit_restriction(page_id, allowed_account_ids=allowed)
+            await on_step(restriction_applied_at=utc_now())
+
+        # (2) Move into the published folder (adjacent to source, so never re-ingested — AD-10/AD-14).
+        # A no-op if the page is already placed there, which is what makes a resume safe.
+        if not move_done:
+            await self._confluence.move_page(page_id, tenant.confluence_published_folder_id)
+            await on_step(moved_to_published_at=utc_now())
+
+        # (3) Export storage → Markdown to server disk for the later SSG step (FR-15 step 3).
+        md_path = existing_md_path
+        if not export_done:
+            page = await self._confluence.get_page(page_id)
+            markdown = self._confluence.storage_to_markdown(page.body_storage)
+            md_path = self._write_export(tenant.md_export_dir, prd_id, page_title, markdown)
+            await on_step(md_exported_at=utc_now(), md_export_path=md_path)
+
+        return PublishResult(
+            md_export_path=md_path,
+            restriction_applied=not restriction_done,
+            moved=not move_done,
+            exported=not export_done,
+        )
+
+    @staticmethod
+    def _write_export(md_export_dir: str, prd_id: str, title: str, markdown: str) -> str:
+        """Write the `.md` to the tenant's export dir. Overwrite-safe, so a resume re-export is fine."""
+        directory = Path(md_export_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "userdoc"
+        path = directory / f"{prd_id}-{slug}.md"
+        path.write_text(markdown, encoding="utf-8")
+        return str(path)

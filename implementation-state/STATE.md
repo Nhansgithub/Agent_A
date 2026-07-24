@@ -29,26 +29,33 @@ Run it later with `.venv/bin/python scripts/run_classifier_eval.py`.
 
 ## ▶ Next Action
 
-**Epic 5 — Approval & Publishing.** The flow reaches `passed` (via the PM Done transition) and stops
-there (no handler). Epic 5 fills `passed` and `publishing`.
+**Epic 6 — Resilience, Recovery & Operations** (mostly hardening + the one deploy story), **plus the
+production composition root** that wires the real context object the handlers expect.
 
-- **5.1** (critical) `passed` handler: post a confirmation comment on the Review ticket, create the
-  Publishing ticket in the Main project for the Head of Product (find-or-create by marker, AD-11),
-  advance to `awaiting_publish_approval` (park). Uses `TicketManager.create_publishing_ticket`
-  (already built in Epic 3).
-- **5.2** (critical) Head of Product publish gate: already handled by `Orchestrator.apply_gate_done`
-  (matches `publishing_ticket_key` → advances to `publishing`). Story 5.2 is mostly *tests* proving
-  the park + the ticket-match + no-self-transition (AD-15). Add the `passed`→`awaiting_publish_approval`
-  wiring in 5.1 so 5.2's gate detection has somewhere to land.
-- **5.3** (critical) `publishing` handler — the ordered, per-side-effect-idempotent transaction
-  (AD-18): (1) apply the Confluence edit restriction **including the agent account** (AD-10 cached id),
-  (2) v1-move the page into `confluence_published_folder_id`, (3) export storage→Markdown to
-  `md_export_dir`, (4) mark `complete`. Each step guarded by its state-record sub-checkpoint
-  (`restriction_applied_at` / `moved_to_published_at` / `md_exported_at`) so a resume skips what's done.
+Build order (offline-buildable first, gated last):
+- **6.1** Error surfacing + admin resume (`app/agents/error_handler.py`): on any `AgentError` after
+  retries, the orchestrator already sets `stage=error` + preserves `last_good_checkpoint`; the Error
+  handler posts the EH-01 comment (plain error + fix + `@admin` + the literal `@agent resume`
+  instruction + correlation id). Resume = an admin comment containing `@agent resume`/`fixed` re-runs
+  `last_good_checkpoint` (dedupe-guarded so a duplicate can't double-resume).
+- **6.2** Reconciler/liveness sweep (`app/admin/`, AD-22): authenticated localhost endpoint the cron
+  hits; alerts stale parked/error runs once per threshold (`liveness_alerted_at`) and re-polls the two
+  gate tickets, feeding a found Done as an *input* (never a stage write; the collision defenses are
+  the serial queue + the AD-9 dedupe key + idempotent advance).
+- **6.7** Content-gating flag — already threaded (`trace_content`); add the verification test + wire it.
+- **Composition root** (`app/main.py` + a context module): build the real per-run context (tenant
+  config + adapters + agents + repository) that satisfies the Detection/Authoring/Review/Publish
+  context protocols, and register all stage handlers. Wire the FastAPI webhook endpoint (Epic 1
+  ingress) → orchestrator `advance` / `apply_pm_comment` / `apply_gate_done`.
+- **6.3** Off-box backup (`deploy/`, AD-23): litestream config + restore doc. **PARTIAL** — needs DO
+  Spaces (BLOCKERS B-4).
+- **6.5** 1 GB envelope hardening: Dockerfile (slim), Caddyfile, swap+firewall scripts, single worker.
+- **6.4** Deploy + end-to-end run: **PARTIAL/BLOCKED** — needs the Droplet + live tenant (B-3/B-4/B-5).
+- **6.6** Config-only modifiability: add a second tenant to a test registry, prove routing; the
+  NFR-05 grep test already guards literal isolation.
 
-Seams ready: `ConfluenceAdapter.set_edit_restriction` (refuses empty allow-list), `move_page`,
-`storage_to_markdown`; the AD-10 agent-account cache pattern from `DetectionAgent`. After Epic 5 the
-whole happy path runs end to end (against fakes); Epic 6 is deploy + resilience.
+Reminder: Story 2.4's *live* classifier eval and the whole live end-to-end run wait on credentials.
+Build and unit-test everything offline; mark the live-only pieces PARTIAL with a clear note.
 
 ## Environment notes
 
