@@ -55,7 +55,13 @@ fi
 echo "==> Data directory for the SQLite store + exported .md files (backed up by litestream, AD-23)"
 mkdir -p /data/userdocs
 mkdir -p /opt/agent/config
-echo "    /data and /opt/agent ready"
+# The container runs as non-root uid 10001 (the image's `agent` user). A bind mount keeps the HOST's
+# ownership and shadows whatever the image set, so a root-owned /data leaves the process unable to
+# create its SQLite file — the container then crash-loops on
+# `sqlite3.OperationalError: unable to open database file`. Match the uid rather than loosening the
+# mode: the agent holds broad Atlassian rights via its token and should not also run as root.
+chown -R 10001:10001 /data
+echo "    /data (owned by uid 10001) and /opt/agent ready"
 
 echo "==> Reminder"
 cat <<'NOTE'

@@ -29,7 +29,12 @@ poetroastery.com {
 		respond "Not found" 404
 	}
 
+	# Access logs go to stderr, which systemd captures into the journal (`journalctl -u caddy`).
+	# Deliberately NOT a file: the packaged unit runs Caddy as the `caddy` user under
+	# `ProtectSystem=full`, and writing to /var/log/caddy failed with EACCES even with the directory
+	# chowned — and on a 25 GB disk an unrotated access log is its own hazard. journald already
+	# rotates and size-caps for us (AD-21).
 	log {
-		output file /var/log/caddy/access.log
+		output stderr
 	}
 }
