@@ -469,3 +469,51 @@ and wiring added — 95 files, 354 dependencies analyzed, 0 broken.
 on credentials/infra: the S2.4 classifier 0-FP/0-FN eval (Anthropic key, B-1) and the S6.4 end-to-end
 demo run (Droplet + tenant, B-3/B-4/B-5). Everything is built and unit-tested offline; when the
 credentials arrive, the remaining work is running two commands and walking the two gates.
+
+---
+
+## 2026-07-24 · Session 1 (cont.) — LIVE integration against the real tenant
+
+Nhan completed third-party setup (`verify_setup.py` green). Ran the live work.
+
+### Security remediation (first)
+Real secrets (Atlassian token, Anthropic key, webhook/admin secrets, LangSmith key) had been pasted
+into the **git-tracked** `.env.example` working copy. Verified they were **never committed** and `.env`
+is correctly gitignored; restored `.env.example` to placeholders. Also restored
+`config/registry.example.yaml` (deleted from the working tree during setup). `config/registry.yaml`
+(the real one) is left untracked — decision pending (see below).
+
+### Live findings & fixes (things offline fakes could not catch)
+1. **`temperature` → 400.** Claude Sonnet 5 / Opus 4.8 reject sampling params (removed on the Claude
+   5 family / Opus 4.7+). Removed `temperature` from `LlmClient.complete` and the classifier/feedback
+   call sites; determinism now comes from the SKILL.md rubric. (D-15)
+2. **Confluence v2 folder children are at `/direct-children`, not `/children`** (the latter 404s to the
+   web UI). Fixed `find_page_by_prd_marker` (AD-11 orphan adoption).
+3. **Composition didn't thread the triggering page event** → detection crashed on `None`. Reworked
+   `RunContext` to fetch the page live (`get_page_event` / `page_markdown` / `confluence_space_id`) and
+   added `composition.stash_event` so the webhook layer hands the parsed event in; added `page_url`.
+4. **Single-account demo:** the demo PRD is created with the agent's own token, which AD-10's
+   self-author guard (correctly) declines. Faithful in production (human PM ≠ agent service account,
+   per SETUP-GUIDE Part 1). The demo driver presents the event as authored by the configured PM — the
+   real "a human uploaded this" input a webhook carries.
+
+### Live verification — PASSED
+- **S2.4 classifier eval:** ran `scripts/run_classifier_eval.py` against Claude — **0 FP / 0 FN,
+  stable across 3 runs** on the holdout set (15 classifications). The demo's one objective quality
+  gate, now genuinely met.
+- **Adapters:** live read-only smoke — Jira + Confluence auth, folder read, JQL search all work.
+- **S6.4 happy path (phase 1):** `scripts/run_local_demo.py` created a real PRD page, and the flow ran
+  live: detect → classify (Claude ACCEPT) → tracking ticket **AMS-11** created & driven to Done →
+  **Opus 4.8 drafted + self-critiqued** the UserDoc → published to the draft folder (**page 1540119**,
+  stamped `agent-generated`) → Review ticket **UDR-1** created, assigned to the PM, framed comment
+  posted → parked at `awaiting_review`. The drafted guide is genuinely good (task-based, user's
+  language, a stated assumption about the shortcut key).
+
+### Where it stopped — a human gate (by design)
+The run is parked at `awaiting_review`. AD-15 forbids the agent moving a gate ticket, so this is the
+correct hand-off point. **Remaining is human action:** the PM moves UDR-1 to Done (→ PASS → Publishing
+ticket), then the Head of Product moves the Publishing ticket to Done (→ restrict/move/export →
+complete). Drive with `scripts/run_local_demo.py --resume` after each. The webhook-driven form of all
+this needs the Droplet deploy (B-4/B-5).
+
+**Decisions recorded:** D-15 (no temperature — models reject it).

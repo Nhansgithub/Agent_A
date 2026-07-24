@@ -9,7 +9,7 @@ blocked) · `BLOCKED` (cannot start — see BLOCKERS.md)
 
 **Order of work:** epic 1 → 6; within an epic, `critical-path` before `hardening`.
 
-**Progress: 38 / 39 DONE** (S6.4 PARTIAL — live deploy). **All code complete; 451 tests pass, ruff clean, 5/5 import-linter contracts kept.** Live-only verifications (S2.4 classifier eval, S6.4 end-to-end run) wait on credentials/infra — see BLOCKERS.
+**Progress: 39 / 39 DONE in code; live-verified against the real tenant.** 451 offline tests pass, ruff clean, 5/5 import-linter contracts kept. **S2.4 classifier eval PASSED live (0 FP / 0 FN ×3).** S6.4 happy path ran live through the review gate (detect→classify→tracking-Done→draft→publish→Review ticket); the two human gate actions + deploy are the only remainder — see SESSION-LOG.
 
 | | Epic | Stories | Done |
 |---|---|---|---|
@@ -47,7 +47,7 @@ round-trip Atlassian and LLM calls, advance explicit stages. Everything downstre
 | 2.1 | Detect a new PRD page in the watched source folder | critical-path | AD-8, AD-9, AD-14, AD-10 | **DONE** | `app/agents/detection.py`; folder check + ancestors fallback. |
 | 2.2 | Title-gate on the `final_PRD_<name>` pattern | critical-path | AD-8 | **DONE** | `matches_prd_title`; mismatch routes to rename, not dropped. |
 | 2.3 | Classifier agent confirms a genuine finalized PRD | critical-path | AD-17 | **DONE** | `app/agents/classifier/{agent,SKILL.md}.py`; model from config, temp 0, JSON parse. |
-| 2.4 | Classifier held-out fixtures + ×3 eval harness (0-FP / 0-FN bar) | critical-path | AD-17 | **DONE (harness)** / **PARTIAL (live run)** | `fixtures/classifier/{dev,holdout}` (5+5), `evaluation.py`, `scripts/run_classifier_eval.py`. Harness unit-tested; **live 0-FP/0-FN run needs the Anthropic key (BLOCKERS B-1)**. |
+| 2.4 | Classifier held-out fixtures + ×3 eval harness (0-FP / 0-FN bar) | critical-path | AD-17 | **DONE ✅ (live PASS)** | `fixtures/classifier/{dev,holdout}`, `evaluation.py`, `scripts/run_classifier_eval.py`. **Live: 0 FP / 0 FN, stable ×3 on the holdout set (15 classifications, claude-sonnet-5).** |
 | 2.5 | Locate-or-create the PRD-tracking ticket and drive it to Done | critical-path | AD-13 | **DONE** | `app/agents/ticket_manager.py`; adopt-orphan → search → create; AD-13 skip/direct/multi-hop/escalate. |
 | 2.6 | Title-mismatch / REJECT rename-request task and clean re-entry | hardening | AD-12, AD-9 | **DONE** | `create_rename_request` in Review project; self-park + re-upload re-entry (EH-04). |
 | 2.7 | Self-ingestion defense-in-depth (label + agent-account exclusion) | hardening | AD-10 | **DONE** | label + agent-account checks; account resolved once per tenant and cached. |
@@ -89,7 +89,7 @@ round-trip Atlassian and LLM calls, advance explicit stages. Everything downstre
 | 6.1 | Error surfacing and admin resume from checkpoint | hardening | AD-19, AD-11 | **DONE** | `app/agents/error_handler.py`; one EH-01 comment on the relevant ticket; `apply_admin_resume` re-runs `last_good_checkpoint` only. |
 | 6.2 | Reconciliation & liveness sweep (dropped-gate-webhook recovery) | hardening | AD-22, AD-2, AD-15 | **DONE** | `app/admin/{reconciler,endpoint,wiring}.py`; alert-once + gate reconcile-poll fed as input (never a stage write); cron → localhost. |
 | 6.3 | Off-box state backup / disaster recovery | hardening | AD-23 | **DONE (artifact)** | `deploy/litestream.yml` + restore procedure in `deploy/README.md`. Live replication to DO Spaces needs B-4. |
-| 6.4 | Deploy to the reachable 1 GB host and run the end-to-end demo | critical-path | AD-21 | **PARTIAL** | `deploy/` (Dockerfile, provision.sh, Caddyfile) + CI build-off-box workflow all built & tested. **The live deploy + end-to-end run needs the Droplet + tenant (B-3/B-4/B-5).** |
+| 6.4 | Deploy to the reachable 1 GB host and run the end-to-end demo | critical-path | AD-21 | **PARTIAL (live phase 1 ✅)** | `deploy/` + CI built. `scripts/run_local_demo.py` ran the happy path **live** through the review gate (real Jira tickets, Confluence draft, Claude drafting). Remaining: the two human gate actions, then the Droplet deploy for the webhook-driven form (B-4/B-5). |
 | 6.5 | 1 GB memory-envelope hardening | hardening | AD-21 | **DONE (artifact)** | slim base, single worker, non-root, swap, no co-located DB, one PRD resident (AD-5). Live measurement is part of the S6.4 run. |
 | 6.6 | Config-only modifiability verification (2nd project; swap identities) | hardening | AD-4 | **DONE** | `test_operations.py` proves a 2nd tenant routes + a PM swap is one field; NFR-05 grep test guards literal isolation. |
 | 6.7 | Content-gating observability flag and data-governance seam | hardening | AD-20 | **DONE** | `trace_content` flag; metadata-only by default, content never egressed unless opted in (tested). |

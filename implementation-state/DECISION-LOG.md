@@ -206,3 +206,15 @@ that the §9 list deliberately omits); reusing `awaiting_clarification` (overloa
 would confuse the Feedback interpreter's routing later).
 **Revisit if:** the rename wait ever needs the AD-22 liveness sweep to watch it — then a dedicated
 stage in `LIVENESS_WATCHED_STAGES` would be worth the change.
+
+### D-15 · No `temperature`/`top_p`/`top_k` — the pinned models reject them  (2026-07-24, live)
+**Context:** The first live classifier call returned `400: temperature is deprecated for this model`.
+The claude-api skill confirms sampling parameters are **removed** on the Claude 5 family (Sonnet 5)
+and Opus 4.7+ — every model this project pins rejects them.
+**Decision:** removed the `temperature` parameter from `LlmClient.complete` and the classifier /
+feedback-interpreter call sites (they had passed `temperature=0`).
+**Rationale:** determinism where it matters (the classification bar, feedback routing) is steered by
+the SKILL.md rubric and the typed-decision contract, not a sampling knob — which is the guidance for
+these models. Sending the parameter is a hard 400, so this is required, not optional.
+**Found by:** the live classifier eval — offline fakes accepted `temperature`, so only the real API
+surfaced it. Reinforces running the live smoke early.

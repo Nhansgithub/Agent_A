@@ -11,39 +11,40 @@
 
 ## Where the build is
 
-**All six epics are code-complete. 38 / 39 stories DONE; S6.4 (live deploy) is PARTIAL.**
-Test suite: **451 passed**, `ruff check` clean, **5/5 import-linter contracts kept**. The whole
-service composes and runs offline (`/health` 200; unauthenticated webhook/admin → 401).
+**All 39 stories built; the system is LIVE-VERIFIED against the real Atlassian tenant + Claude.**
+451 offline tests pass, ruff clean, 5/5 import-linter contracts kept.
 
-The full happy path runs end to end against fakes:
-`detect → title-gate → classify → tracking ticket → draft + self-critique → publish draft → Review
-ticket + framed request → [PM feedback ⇄ revise loop] → PASS → Publishing ticket → [Head of Product
-Done] → restrict + move + export .md → complete`, plus every hardening path (rename request, cross-org
-identity, structure-confirm, clarification, error+resume, reconcile/liveness, idempotent publish).
+- **S2.4 (the one measurable gate) PASSED live:** classifier eval is 0 FP / 0 FN, stable ×3 on the
+  holdout set. Re-run any time: `.venv/bin/python scripts/run_classifier_eval.py`.
+- **S6.4 happy path ran live through the review gate:** `scripts/run_local_demo.py` created a real
+  PRD, and the flow did detect → classify → tracking ticket (AMS-11, Done) → Opus 4.8 draft →
+  published draft (page 1540119) → Review ticket (UDR-1) → parked at `awaiting_review`.
 
-**Two things remain, both gated on credentials/infra (not code):**
-1. **S2.4 — live classifier eval** (Anthropic key, BLOCKERS B-1): `.venv/bin/python
-   scripts/run_classifier_eval.py` must show 0 FP / 0 FN on the holdout set ×3. The harness + fixtures
-   are done and unit-tested; only the real Claude run is pending.
-2. **S6.4 — deploy + end-to-end demo run** (Droplet + Atlassian tenant + Spaces, B-3/B-4/B-5):
-   follow `deploy/README.md`. Everything it needs is built.
+Four live-only fixes landed (things offline fakes couldn't catch): `temperature` 400 (D-15),
+Confluence `/direct-children` path, live page-event threading, and the single-account self-author
+nuance. All committed; suite green.
+
+**The run is parked at a human gate (`awaiting_review`) — correct by AD-15.** The agent must never
+move a gate ticket; a human does.
+
+---
 
 ## ▶ Next Action
 
-**Waiting on the user.** Nhan is completing third-party setup via `SETUP-GUIDE.md` and will send a
-message when done. When credentials land:
+**Hand-off to Nhan for the two human gates**, then optionally deploy for the webhook-driven form.
 
-1. Create `.env` + `config/registry.yaml` (SETUP-GUIDE Parts 1-6); run
-   `scripts/verify_setup.py` until green.
-2. Run `scripts/run_classifier_eval.py` — confirm the 0-FP/0-FN holdout bar (S2.4). If a fixture
-   fails, tune the classifier `SKILL.md` against the **dev** set only (never the holdout).
-3. Build the image in CI (`.github/workflows/build-image.yml`), provision the Droplet
-   (`deploy/provision.sh`), deploy (`deploy/README.md`), register the webhooks (SETUP-GUIDE Part 7).
-4. Create a `final_PRD_<name>` page and walk the two gates — the §12 Definition of Done.
+1. **PM PASS:** open Review ticket **UDR-1**, optionally leave feedback in the `Section: / Issue: /
+   Suggested change:` format (the agent will revise), then move it to **Done**. Run
+   `.venv/bin/python scripts/run_local_demo.py --resume` → creates the Publishing ticket, parks at
+   `awaiting_publish_approval`.
+2. **Head of Product approve:** move the Publishing ticket to **Done**, then `--resume` again →
+   restrict + move to the published folder + export the `.md` + mark complete.
+3. **Webhook-driven form (S6.4 full):** deploy to the Droplet (`deploy/README.md`) and register the
+   webhooks (SETUP-GUIDE Part 7) so the flow triggers on a real page-create instead of the driver.
 
-Until then there is no code work that is not blocked. If asked to keep improving offline, candidates:
-broaden the classifier fixture set, add more markdown-conversion edge cases, or an end-to-end
-integration test that drives the whole flow through the composition with fakes injected.
+Open decision for the user: `config/registry.yaml` holds their real account/folder IDs and is
+currently **untracked**. SETUP-GUIDE says it is committable (no secrets), but for a shared/template
+repo it is cleaner to gitignore it. Decide before pushing anywhere.
 
 ## Environment notes
 
