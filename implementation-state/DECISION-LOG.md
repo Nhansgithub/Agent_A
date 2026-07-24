@@ -364,3 +364,54 @@ but it identifies a specific Atlassian site.
 **Rationale:** the tree stays tenant-free (the spirit of AD-4/NFR-05), the repo can be made public
 later without rewriting history, and it mirrors how `.env` is already handled. Verified after the
 change: a scan of every committable file found no tenant literal and no secret-shaped string.
+
+### D-25 · Deploy fixes found only on the live Droplet  (2026-07-24)
+**Context:** the `deploy/` assets had never been executed. Three defects appeared only against a real
+box, all after the runbook said "done".
+**Decisions:** (1) `provision.sh` chowns `/data` to uid 10001 — the container runs as the non-root
+`agent` user, but a bind mount keeps the HOST's ownership and shadows what the image set, so a
+root-owned `/data` crash-looped on `sqlite3.OperationalError: unable to open database file`. Matching
+the uid beats loosening the mode: the agent holds broad Atlassian rights and must not also be root.
+(2) Caddy logs to stderr/journald, not a file — the packaged unit runs under `ProtectSystem=full` and
+EACCES'd on `/var/log/caddy` even chowned, and an unrotated access log on a 25 GB disk is its own
+hazard. (3) The Droplet's registry uses **absolute** `/data/...` paths; the relative ones resolve
+under `/app` inside the container, so state and exports would have been silently discarded on every
+`docker run`.
+**Note:** the Droplet's `registry.yaml` therefore differs from the local copy on purpose. Re-copying
+the local file over it breaks persistence with no error.
+
+### D-26 · Webhook drops must be visible  (2026-07-24, live)
+**Context:** the first real Confluence Automation delivery returned 200 and started nothing, with no
+explanation anywhere. Uvicorn configures only `uvicorn.*` loggers; `app.*` propagates to a root
+logger with no handler, so Python's `lastResort` emitted WARNING+ and **discarded every INFO** — and
+all four AD-8 drop reasons are logged at INFO.
+**Decision:** `configure_logging()` in `app/main.py`, called by `create_app`, honouring `LOG_LEVEL`
+and no-oping if a host already configured logging.
+**Rationale:** a webhook endpoint that answers 200, does nothing, and cannot say why is unoperable.
+It paid for itself immediately: the very next delivery printed the real cause (D-27).
+
+### D-27 · The page version is resolved app-side; Automation cannot supply it  (2026-07-24, live)
+**Context:** every real page delivery was dropped with `missing required field
+'page.version.number'`. **Confluence Cloud Automation exposes no page-version smart value at all**
+(confirmed against Atlassian docs), and an Automation rule is the only way to trigger on a page event
+without a Connect app — so the parser's requirement made the product untriggerable.
+**Decision:** `version_number` is optional. An unversioned event gets **no dedupe key** from the
+ingress, and the router resolves the authoritative version with one `GET page` (after the signature
+check) before keying and admitting.
+**Rationale:** keying an empty marker would have been far worse than dropping — one key per page
+forever, so the first edit recorded and every later one dropped as a duplicate, silently disabling
+EH-04 rename re-entry. Fetching is also *more* correct than trusting a payload field: a redelivery
+and the AD-22 reconciler now derive the same key from the same source of truth.
+**Alternatives rejected:** a timestamp marker (every delivery unique → redeliveries reprocessed);
+guessing further smart-value names (already cost one deploy cycle).
+
+### D-28 · AD-10 is enforced at admission, not only in detection  (2026-07-24, live)
+**Context:** a Confluence Automation trigger is space-wide, so it fires for the agent's **own** draft
+and published pages. Detection declined them correctly — but only *after* `admit` had written a state
+row, so the first webhook-driven run left a permanent `detected` row for its own draft page.
+**Decision:** `_dispatch_page` refuses before admission on two **certain** signals: the reserved
+`agent-generated` label, or the page sitting directly in this tenant's draft/published folder. Both
+come from the page fetch already made for D-27, so there is no extra call.
+**Rationale:** keeps the single durable store (AD-2) free of runs that can never advance. The guard
+is deliberately conservative — a page with an unknown or nested container is still admitted and left
+to detection's ancestors lookup, so it can never refuse a genuine PRD.

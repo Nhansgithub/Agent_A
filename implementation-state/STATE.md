@@ -75,36 +75,45 @@ relative `database_path`/`md_export_dir` that would have silently discarded stat
 recreate. Nhan's Jira webhook also pointed at the raw IP (TLS could never validate) and filtered on
 `project in (MAIN, REV)` instead of `AMS, UDR`; both fixed.
 
-### ▶ The ONE remaining setup step (blocks everything below)
+### ✅ S6.4 IS CLOSED — the first fully webhook-driven run happened
 
-**Confluence Automation rules are not configured.** Verified: `GET /wiki/rest/webhooks/1.0/webhook`
-returns `[]`, and the Droplet's `prd_state` table has **0 rows** — no PRD has ever been processed
-there. Confluence Cloud has no admin webhook screen and no API the agent can drive for this, so it is
-Nhan's UI work: **Space settings → Automation → Create rule**, trigger *Page created*, action *Send
-web request* → `https://poetroastery.com/webhooks/atlassian`, POST, header `X-Webhook-Secret` =
-`WEBHOOK_SHARED_SECRET`. **Repeat for *Page updated*** (that one carries EH-04's rename re-entry).
+Both Confluence Automation rules are live. A `final_PRD_Cold Brew Scheduler` page created in the
+watched folder started a run **with no local driver and no human standing in for the webhook layer**:
 
-Until both rules exist, creating a `final_PRD_*` page does nothing. The Jira half is already live and
-proven, so the two human gates will work the moment a run exists.
+page created → Automation → HTTPS → Caddy → container → detect → classify → tracking ticket
+**AMS-13** (auto-transitioned to Done, AD-13) → Claude drafted → draft page **1474798** (labelled
+`agent-generated`, moved to the draft folder) → Review ticket **UDR-2** → review requested → parked
+at `awaiting_review`.
 
-### Then: the S6.4 closing run
+The D-16 self-ingestion guard was observed working live in the same run:
+`webhook dropped: dropped_duplicate (project_alpha:jira.comment_created:10014 was already admitted)`
+— the agent's own review-request comment echoing back and being refused.
 
-Create a `final_PRD_<name>` page in the source folder (65871) and let it run untouched — no local
-driver. Walk the two gates in the UI. That is the PRD §12 Definition of Done, and the first time the
-system runs with no human standing in for the webhook layer.
+### ▶ Next Action — walk the two gates on UDR-2
+
+This run is **live on the Droplet**, not the Mac. Do it in the Atlassian UI; there is nothing to run
+locally, and `run_local_demo.py` must NOT be used (it drives the Mac's separate database).
+
+1. **PM:** open **UDR-2**, optionally leave feedback in the `Section: / Issue: / Suggested change:`
+   format (a revise round will run by itself), then move it to **Done**.
+2. **Head of Product:** the Publishing ticket appears in AMS; move it to **Done**.
+3. Watch it in `journalctl`/`docker logs agent` on the Droplet, and in LangSmith for per-step
+   latency/cost — that is the PRD §12 Definition of Done.
+
+Step 2 also exercises D-28 live: publishing moves the draft into the published folder, which fires a
+page event for the agent's own page that must be refused at admission.
 
 ### Known gaps, deliberate
 
 1. **AD-23 off-box backup is NOT running** (litestream skipped by Nhan's call). The Droplet's SQLite
    is single-copy: losing the disk loses in-flight runs. `deploy/litestream.yml` is ready if wanted.
 2. **FR-15 step 1 has never executed anywhere** — Confluence Free has no page restrictions (B-7,
-   D-21). `require_edit_restriction: false`. The published page is editable by anyone with space
-   access.
-3. **The Droplet and the Mac have separate state.** `data/state.db` locally holds the completed demo
-   run; the Droplet's `/data/state.db` is empty. They never sync.
-4. **Droplet config diverges from the repo copy on purpose:** `/opt/agent/config/registry.yaml` uses
-   absolute `/data/...` paths. Re-copying the local file would break persistence — re-apply the
-   substitution (see D-25).
+   D-21). The published page will be editable by anyone with space access, and the agent says so on
+   the Publishing ticket.
+3. **The Droplet and the Mac have separate state.** The Mac's `data/state.db` holds the older
+   `final_PRD_Quick Notes` run (complete); the Droplet holds the Cold Brew run. They never sync.
+4. **Droplet config diverges from the repo copy on purpose** — `/opt/agent/config/registry.yaml`
+   uses absolute `/data/...` paths (D-25). Re-copying the local file breaks persistence with no error.
 
 ## Environment notes
 
