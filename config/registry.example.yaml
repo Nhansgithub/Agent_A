@@ -1,0 +1,97 @@
+# ---------------------------------------------------------------------------------------------
+# Config registry — the ONLY home for project-specific literals (AD-4, PRD §11).
+#
+# Copy to config/registry.yaml and fill in for this deployment.
+#
+# Onboarding a project, or swapping the Reviewer PM / Head of Product / admin, is an edit to THIS
+# FILE and nothing else — no code change (NFR-02). If you ever find yourself editing app/ to change
+# a folder id, a project key, or an account id, the change is in the wrong place.
+#
+# Secrets NEVER appear here. Credentials are `env:PREFIX` references resolved from the environment
+# at the point of use; see .env.example.
+# ---------------------------------------------------------------------------------------------
+
+system:
+  # The single authoritative durable store (AD-2, AD-11). Replicated off-box by litestream (AD-23).
+  database_path: "data/state.db"
+
+  # AD-8 — validated before dedupe and before tenant resolution, so necessarily system-wide.
+  webhook_secret_ref: "env:WEBHOOK_SHARED_SECRET"
+  # AD-22 — authenticates the localhost reconcile endpoint the cron sweep calls.
+  admin_token_ref: "env:ADMIN_API_TOKEN"
+  anthropic_api_key_ref: "env:ANTHROPIC_API_KEY"
+
+  # NFR-08 — transient Atlassian failures retried with backoff inside the adapters.
+  retry_max_attempts: 3
+  retry_backoff_seconds: 1.0
+
+  # AD-17 — model ids are PINNED in config, never hard-coded at a call site. Changing the classifier
+  # model invalidates the holdout eval; re-run it (Story 2.4) after any change here.
+  models:
+    classifier: "claude-sonnet-5"
+    author: "claude-opus-4-8"
+    feedback_interpreter: "claude-sonnet-5"
+
+  # AD-20 / NFR-01 — 100% of LLM calls traced with latency, tokens, cost.
+  observability:
+    langsmith_enabled: false
+    langsmith_project: "leapxpert-agent-a"
+    langsmith_api_key_ref: "env:LANGSMITH_API_KEY"
+
+  # AD-22 — liveness + gate reconcile sweep. Recoverability for dropped webhooks, NOT a timeout:
+  # crossing the threshold alerts the admin once; the run still parks indefinitely.
+  reconciler:
+    enabled: true
+    liveness_threshold_minutes: 1440
+
+tenants:
+  # The mapping key becomes `project_id` — the tenant component of the AD-9 dedupe key.
+  project_alpha:
+    # --- Confluence folders (AD-14: first-class folder ids) -------------------------------------
+    # WATCHED by FR-01 detection.
+    confluence_source_folder_id: "REPLACE_SOURCE_FOLDER_ID"
+    # Where UserDoc drafts are posted for the review loop (FR-06).
+    confluence_draft_folder_id: "REPLACE_DRAFT_FOLDER_ID"
+    # Approved UserDocs (FR-15). MUST sit ADJACENT TO — never inside — the source folder, or the
+    # agent re-ingests its own output in an infinite loop. This is the PRIMARY self-ingestion guard
+    # (AD-10); the `agent-generated` label and author checks are only defense-in-depth.
+    # Validated at load time.
+    confluence_published_folder_id: "REPLACE_PUBLISHED_FOLDER_ID"
+
+    # --- Jira projects --------------------------------------------------------------------------
+    jira_main_project_key: "REPLACEMAIN"      # PRD-tracking (FR-04) + Publishing (FR-13) tickets
+    jira_review_project_key: "REPLACEREV"     # Review (FR-06) + rename-request (FR-02a) tickets
+
+    # --- identities -----------------------------------------------------------------------------
+    # Atlassian accountIds. NOT emails, NOT usernames. Find one at:
+    #   <site>/wiki/people  ->  the accountId is in the profile URL.
+    pm_account_id: "REPLACE_PM_ACCOUNT_ID"                    # Reviewer PM — owns the PASS gate (FR-12)
+    head_of_product_account_id: "REPLACE_HOP_ACCOUNT_ID"      # publish gate (FR-14)
+    admin_account_id: "REPLACE_ADMIN_ACCOUNT_ID"              # EH-01 escalation / EH-02 resume
+    # NOTE: the *Uploading PM* is deliberately NOT configured here. It is the Confluence page
+    # creator, resolved at runtime from the event, and used directly as the Jira assignee for the
+    # FR-02a rename task (AD-12) — within one Atlassian org the accountId is shared.
+
+    # AD-12 cross-org fallback: Confluence accountId -> Jira accountId. Leave empty for the same-org
+    # common case; consulted before the email-match fallback.
+    identity_overrides: {}
+
+    # --- Jira workflow (AD-13) ------------------------------------------------------------------
+    # Ordered transition NAMES to reach a done-category status, for workflows with mandatory
+    # intermediate states. Consulted only when no direct transition to done is legal. Empty means
+    # "direct only" — the agent escalates to the admin rather than guessing a path.
+    # e.g. ["Start Progress", "Ready for Review", "Done"]
+    preferred_transition_path: []
+
+    # --- infra ------------------------------------------------------------------------------------
+    md_export_dir: "/data/userdocs/alpha"   # FR-15 step 3 — where the final .md is written
+
+    # --- observability (AD-20) --------------------------------------------------------------------
+    # false = metadata-only traces (latency/tokens/cost, no document body). The demo traces
+    # non-confidential test PRDs only; full redaction/retention is a post-demo item.
+    trace_content: false
+
+    # --- credentials BY REFERENCE, never inline (AD-4) --------------------------------------------
+    # `env:ALPHA_JIRA` resolves ALPHA_JIRA_BASE_URL, ALPHA_JIRA_EMAIL, ALPHA_JIRA_API_TOKEN.
+    jira_credentials_ref: "env:ALPHA_JIRA"
+    confluence_credentials_ref: "env:ALPHA_CONF"

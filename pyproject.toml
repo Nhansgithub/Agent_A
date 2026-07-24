@@ -1,0 +1,154 @@
+[project]
+name = "leapxpert-agent-a"
+version = "0.1.0"
+description = "PRD-to-UserDoc Automation Agent Flow — multi-tenant Confluence/Jira agent pipeline"
+readme = "README.md"
+# Spine Stack table: Python 3.12 (python:3.12-slim base image). Upper bound keeps local dev
+# from silently drifting off the deployed base (AD-21).
+requires-python = ">=3.12,<3.13"
+
+# ---------------------------------------------------------------------------
+# Runtime dependencies — pinned to the Architecture Spine "Stack" table.
+#
+# NFR-10 / AD-6 LICENSING: only the MIT-licensed `langgraph` CORE library.
+#   `langgraph-api` (and the `langgraph dev|build` server product it powers) is
+#   Elastic-licensed and MUST NEVER appear in this manifest or the resolved tree.
+#   Enforced by tests/test_licensing.py.
+#
+# AD-21 MEMORY: this list is the 1 GB envelope. Adding a dependency is a design
+#   decision, not a convenience — justify it in implementation-state/DECISION-LOG.md.
+# ---------------------------------------------------------------------------
+dependencies = [
+    "fastapi==0.136.3",
+    "uvicorn==0.51.0",
+    "langgraph==1.2.9",
+    "langgraph-checkpoint>=4.1.1,<5",  # InMemorySaver; in-invocation only (AD-11)
+    "anthropic==0.117.0",
+    "langsmith==0.10.9",
+    "markdownify==1.2.3",
+    "httpx>=0.27,<1",                  # the only HTTP transport; adapters-only (AD-1)
+    "pydantic>=2.7,<3",                # tenant-config schema + domain models (AD-4)
+    "PyYAML>=6,<7",                    # config registry format (§11)
+    "python-dotenv>=1,<2",             # env-ref secret resolution (AD-4)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.23,<2",
+    "respx>=0.21,<1",                  # fake HTTP transport for adapter tests (no network)
+    "import-linter>=2,<3",             # enforces AD-1 inward-only dependencies
+    "ruff>=0.6,<1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+# ---------------------------------------------------------------------------
+# AD-1 — Layered boundaries with inward-only dependency.
+# Dependencies point inward: webhooks -> router -> orchestrator -> agents ->
+# {adapters, repository} -> {Atlassian, SQLite}. Only adapters open an HTTP
+# socket; only the repository runs SQL. Violations fail CI, not code review.
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_package = "app"
+# Required so the "forbidden" contracts below can name third-party modules (httpx, sqlite3,
+# anthropic). Without it import-linter errors out rather than checking them.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "AD-1: layers point inward only"
+type = "layers"
+layers = [
+    "app.main",
+    "app.webhooks",
+    "app.router",
+    "app.orchestrator",
+    "app.agents",
+    "app.adapters : app.repository",
+    "app.domain",
+]
+exhaustive = false
+
+# `allow_indirect_imports` keeps these checks on *direct* imports. The rule being enforced is
+# "this module must not itself open a socket / run SQL" — an indirect path through a third-party
+# library (langgraph reaching httpx internally) is not a boundary violation and would only produce
+# noise that trains people to ignore the contract.
+
+[[tool.importlinter.contracts]]
+name = "AD-1: only adapters may open an HTTP socket to Atlassian"
+type = "forbidden"
+allow_indirect_imports = "true"
+source_modules = [
+    "app.orchestrator",
+    "app.agents",
+    "app.repository",
+    "app.router",
+    "app.webhooks",
+    "app.config",
+]
+forbidden_modules = ["httpx", "http", "urllib", "requests"]
+
+[[tool.importlinter.contracts]]
+name = "AD-2: only the repository may touch SQLite"
+type = "forbidden"
+allow_indirect_imports = "true"
+source_modules = [
+    "app.orchestrator",
+    "app.agents",
+    "app.adapters",
+    "app.router",
+    "app.webhooks",
+    "app.admin",
+    "app.config",
+    "app.domain",
+]
+forbidden_modules = ["sqlite3"]
+
+[[tool.importlinter.contracts]]
+name = "AD-6: agents own the Anthropic SDK; no other layer calls the LLM directly"
+type = "forbidden"
+allow_indirect_imports = "true"
+source_modules = [
+    "app.adapters",
+    "app.repository",
+    "app.router",
+    "app.webhooks",
+    "app.config",
+    "app.domain",
+]
+forbidden_modules = ["anthropic"]
+
+[[tool.importlinter.contracts]]
+name = "AD-4: config is a leaf — it depends on no other app layer"
+type = "forbidden"
+source_modules = ["app.config"]
+forbidden_modules = [
+    "app.main",
+    "app.webhooks",
+    "app.router",
+    "app.orchestrator",
+    "app.agents",
+    "app.adapters",
+    "app.repository",
+    "app.admin",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# `ruff format` is authoritative for code width at line-length 100. E501 would then only ever fire on
+# prose inside docstrings and comments, where a hard wrap hurts readability more than it helps.
+ignore = ["E501"]

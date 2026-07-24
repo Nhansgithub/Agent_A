@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PRD Validation: PRD-to-User-Document Automation Agent Flow</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --surface: #ffffff;
+    --border: #e7e5e4;
+    --text: #1c1917;
+    --muted: #78716c;
+
+    --verdict-strong: #16a34a;
+    --verdict-adequate: #65a30d;
+    --verdict-thin: #d97706;
+    --verdict-broken: #dc2626;
+
+    --sev-low: #64748b;
+    --sev-medium: #ca8a04;
+    --sev-high: #ea580c;
+    --sev-critical: #dc2626;
+
+    --grade-exc: #16a34a;
+    --grade-good: #65a30d;
+    --grade-fair: #d97706;
+    --grade-poor: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    font-size: 15px;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  header.report-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .title h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .title .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .grade {
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    color: white;
+    font-size: 15px;
+    white-space: nowrap;
+  }
+  .grade-excellent { background: var(--grade-exc); }
+  .grade-good { background: var(--grade-good); }
+  .grade-fair { background: var(--grade-fair); }
+  .grade-poor { background: var(--grade-poor); }
+
+  .synthesis {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin-bottom: 24px;
+    font-size: 15.5px;
+  }
+  .synthesis p { margin: 0 0 10px; }
+  .synthesis p:last-child { margin-bottom: 0; }
+
+  .dimension-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+  .dim-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .dim-card .dim-name { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .dim-card .dim-verdict { font-size: 14px; font-weight: 600; }
+
+  section.dimension, section.reviewer-section { margin-bottom: 14px; }
+  section.dimension details, section.reviewer-section details {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  section summary {
+    padding: 14px 20px;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  section summary::-webkit-details-marker { display: none; }
+  section summary::before {
+    content: "▸";
+    display: inline-block;
+    color: var(--muted);
+    transition: transform 0.15s ease;
+  }
+  section details[open] summary::before { transform: rotate(90deg); }
+  section summary h2 {
+    display: inline;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    flex: 1;
+  }
+  .verdict-pill {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: white;
+  }
+  .verdict-strong { background: var(--verdict-strong); }
+  .verdict-adequate { background: var(--verdict-adequate); }
+  .verdict-thin { background: var(--verdict-thin); }
+  .verdict-broken { background: var(--verdict-broken); }
+
+  .dim-body { padding: 4px 20px 18px; }
+  .dim-judgment { color: var(--text); font-size: 14.5px; }
+  .dim-judgment p { margin: 0 0 10px; }
+
+  .findings-list { padding: 0 20px 4px; }
+  article.finding {
+    padding: 14px 0;
+    border-top: 1px solid var(--border);
+  }
+  article.finding:first-child { border-top: none; }
+  article.finding header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .badge {
+    font-size: 10.5px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+  }
+  .badge-sev-low { background: rgba(100, 116, 139, 0.12); color: var(--sev-low); }
+  .badge-sev-medium { background: rgba(202, 138, 4, 0.14); color: var(--sev-medium); }
+  .badge-sev-high { background: rgba(234, 88, 12, 0.14); color: var(--sev-high); }
+  .badge-sev-critical { background: rgba(220, 38, 38, 0.14); color: var(--sev-critical); }
+  .finding-title { margin: 0; font-size: 15px; font-weight: 500; flex: 1; min-width: 200px; }
+  .finding-location { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; color: var(--muted); }
+  .finding-note, .finding-fix { margin-top: 6px; font-size: 14px; }
+  .finding-fix strong { color: var(--muted); font-weight: 500; }
+
+  .reviewer-source {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  .mechanical {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-top: 24px;
+    font-size: 14px;
+  }
+  .mechanical h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .mechanical ul { margin: 0; padding-left: 20px; }
+  .mechanical li { margin-bottom: 4px; color: var(--text); }
+
+  footer.report-footer {
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  footer .meta { display: flex; gap: 24px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+  <div class="container">
+
+    <header class="report-header">
+      <div class="title">
+        <h1>PRD-to-User-Document Automation Agent Flow — Validation Report</h1>
+        <div class="subtitle">_bmad-output/planning-artifacts/prds/prd-LeapXpert_AgentA-2026-07-23/prd.md</div>
+      </div>
+      <div class="grade grade-fair">Fair</div>
+    </header>
+
+    <div class="synthesis">
+      <p>This is a well-shaped, substantive chain-top build spec: it carries a clear thesis (automate the drafting/revision labor of user docs while humans keep judgment via the tools they already use), honest and load-bearing non-goals (§5.2/§5.3), product-specific NFRs with real thresholds (§7), and a genuinely locked deployment story (§15). It is the right shape for a headless automation service where Jira and Confluence are the entire interface, and its procedural spine (roughly 12 of 15 FRs) is testable and will feed architecture and stories cleanly.</p>
+      <p>It grades <strong>Fair</strong> because the dimensions the stakes make unforgiving both bend. <strong>Done-ness is thin</strong>: the product's core <em>autonomous</em> judgments ship with no test oracle — the PRD classifier (FR-03 "genuinely a finalized PRD") and the "truly blocked" clarification heuristic (FR-08) are unfalsifiable, and the primary output (the UserDoc) has no stated acceptance mechanism. And the human-gate mechanism that is the product's whole point specifies only the happy "Done" transition, leaving rejection, abandonment, and indefinite stalls silently unhandled with no timeouts.</p>
+      <p>The adversarial pass sharpened the picture rather than shifting it, and surfaced concrete build-biters the rubric only implied: an idempotency-vs-rename-re-trigger contradiction (NFR-04 ↔ EH-04); a self-ingestion loop where publishing moves the finished doc into the very folder the webhook watches (FR-15 ↔ FR-01); a "PM who created the page" identity that contradicts "PM fixed in config"; and unacknowledged egress of confidential unreleased-PRD content to LangSmith. Several excerpt artifacts (missing §§6.3–6.6, a dangling "§Phase 5/6" reference, an undefined "SSG") show the adoption from <code>PRD_Agent_Flow.md</code> was not fully reconciled.</p>
+    </div>
+
+    <div class="dimension-summary">
+      <div class="dim-card">
+        <div class="dim-name">Decision-readiness</div>
+        <div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Substance over theater</div>
+        <div class="dim-verdict" style="color: var(--verdict-strong)">strong</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Strategic coherence</div>
+        <div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Done-ness clarity</div>
+        <div class="dim-verdict" style="color: var(--verdict-thin)">thin</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Scope honesty</div>
+        <div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Downstream usability</div>
+        <div class="dim-verdict" style="color: var(--verdict-adequate)">adequate</div>
+      </div>
+      <div class="dim-card">
+        <div class="dim-name">Shape fit</div>
+        <div class="dim-verdict" style="color: var(--verdict-strong)">strong</div>
+      </div>
+    </div>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Decision-readiness</h2>
+          <span class="verdict-pill verdict-adequate">adequate</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>The PRD makes and states its decisions rather than burying them. The deployment target is explicitly <em>locked</em> (§15.1, header). §14 is a genuine architectural-decisions appendix that names trade-offs with what was given up — e.g. "Flow, not a single agent … the trade-off is that the state contract must be explicit and idempotent (owned by us, not a framework)," and "Multi-tenant single service … Container-per-tenant remains a fallback." The licensing decision (MIT LangGraph core only) is concrete and reasoned (NFR-10, §14). The Open Questions (§13) are genuinely open — build-time verifications paired with a <em>Current assumption</em>, not rhetorical.</p>
+            <p>What keeps this from <em>strong</em>: a few decisions a chain-top spec could pin are punted wholesale to "build time" (§13 Q1/Q2), and one cost-relevant decision is left un-adjudicated — FR-11's "no cap until PASS" on an otherwise cost-obsessed demo.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">No-cap redraft loop is an un-adjudicated cost decision</h3>
+              <span class="finding-location">§6.1 FR-11; §3</span>
+            </header>
+            <div class="finding-note">FR-11 sets "repeats with <strong>no cap</strong> until PASS" with no round or cost ceiling and no metric tracking cumulative spend, on a demo whose entire framing is cost/latency-conscious.</div>
+            <div class="finding-fix"><strong>Fix:</strong> state the decision explicitly — either "unbounded by design, cost accepted" or add a soft round cap / cost budget surfaced via the <code>review_round</code> counter and LangSmith.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Chain-top verifications deferred to build-time</h3>
+              <span class="finding-location">§13 Q1/Q2</span>
+            </header>
+            <div class="finding-note">Exact Jira transition path to Done and folder-vs-parent model both shape the ticket-manager and publisher agents, yet are deferred wholesale.</div>
+            <div class="finding-fix"><strong>Fix:</strong> resolve before Architecture, or explicitly flag them as architecture-phase inputs so they are not silently assumed.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Substance over theater</h2>
+          <span class="verdict-pill verdict-strong">strong</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>Content is earned, not furniture. <strong>No persona theater</strong> — §4 Actors &amp; Roles is functional and every role drives real FRs. <strong>No innovation/differentiation theater</strong> — none invented to fill a template. NFRs are product-specific with concrete thresholds (NFR-04 "Dedupe by event/entity id," NFR-08 "e.g. 3 retries," NFR-10 licensing hygiene, NFR-11 "Runs stable on 1 GB"). The Executive Summary (§1) could not be swapped into another PRD unchanged. The heavy §15 deployment detail is load-bearing, not padding, because the 1 GB box is a locked constraint.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Self-critique pass reads slightly checkbox-like</h3>
+              <span class="finding-location">§6.1 FR-05</span>
+            </header>
+            <div class="finding-note">"draft → critique against skill file → single revision" is asserted as a quality mechanism, but with no measurable improvement criterion and against a not-yet-written SKILL.md it is closer to a ritual than a verified control.</div>
+            <div class="finding-fix"><strong>Fix:</strong> state what the critique checks against and what it would reject, even loosely, so it is more than a claimed pass.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Strategic coherence</h2>
+          <span class="verdict-pill verdict-adequate">adequate</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>The PRD has a real thesis and the features serve one arc: detect finalized PRD → author draft → human-gated review loop → Head-of-Product publish gate → publish/export. Scope kind is coherent (problem-solving; RAG/SSG/parallelism deferred as seams). Most success metrics validate the thesis (human control: "100% of runs gated"; modifiability: "adding a 2nd project via config").</p>
+            <p>The coherence gap is measurement. There are <strong>no counter-metrics</strong> despite Success Metrics existing (§3), and the headline metric — a <em>usable</em> user doc — never defines "usable." The demo can score its top metric (1 successful full run) while emitting a hollow or wrong document, because nothing measures output quality and no guardrail metric is named.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">No counter-metrics and an undefined "usable" success bar</h3>
+              <span class="finding-location">§3</span>
+            </header>
+            <div class="finding-note">The top goal can be met by a single happy-path run regardless of output quality; nothing guards against a hollow success.</div>
+            <div class="finding-fix"><strong>Fix:</strong> add at least one counter-metric (e.g. classifier false-positive/negative on a small labeled set, or "PM required ≤ N revision rounds") and define what "usable" means for the demo.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details open>
+        <summary>
+          <h2>Done-ness clarity</h2>
+          <span class="verdict-pill verdict-thin">thin</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>The <em>procedural</em> spine is genuinely testable — roughly 12 of 15 FRs have verifiable consequences (FR-01 route by config; FR-02 title regex; FR-06 page+ticket created and assigned; FR-07 comment contains the four required elements; FR-12/13/14 transition-driven; FR-15 lock/move/export/mark-complete), and the DoD (§12) sharpens many into a checklist. That is real credit.</p>
+            <p>But this is the dimension story creation leans on hardest, and the product's value-producing autonomous judgments have <strong>no test oracle</strong>. FR-03 asks the classifier to confirm a page is "genuinely a finalized PRD" with no examples, accuracy target, or verification path, even though this gate decides whether the flow starts. FR-08 fires when the agent is "truly blocked … not for trivial assumptions" — untestable as stated. FR-05's UserDoc is the primary output, yet its acceptance is never declared (human PASS is the implicit but unstated oracle). And EH-02 resumes "from the last good checkpoint" without defining "step" or "checkpoint" granularity — FR-15's four sub-actions could double-apply on re-run absent stated idempotency.</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-high">high</span>
+              <h3 class="finding-title">Core autonomous judgments have no acceptance criteria or test oracle</h3>
+              <span class="finding-location">§6.1 FR-03, FR-08</span>
+            </header>
+            <div class="finding-note">"genuinely a finalized PRD" and "truly blocked" are unfalsifiable; FR-03 gates flow entry with real false-positive/false-negative cost, and downstream stories/QA have nothing to verify against.</div>
+            <div class="finding-fix"><strong>Fix:</strong> give the classifier a concrete decision rubric + a small labeled fixture set (accept/reject examples) and a demo accuracy expectation; give FR-08 a bounded, enumerated trigger definition.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">UserDoc acceptance mechanism unstated</h3>
+              <span class="finding-location">§6.1 FR-05</span>
+            </header>
+            <div class="finding-note">The primary output's "done" is never defined; human PASS is the implicit oracle but is not declared as such, leaving FR-05's own done-ness ambiguous.</div>
+            <div class="finding-fix"><strong>Fix:</strong> state explicitly that FR-05's acceptance is "a self-critiqued draft is produced and posted; content quality is accepted solely via the PM PASS gate (FR-12)."</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Resume checkpoint/step granularity undefined; multi-action step double-apply risk</h3>
+              <span class="finding-location">§8 EH-02; §6.1 FR-15; §10</span>
+            </header>
+            <div class="finding-note">"re-run the failed step from the last good checkpoint" is unspecified, and FR-15's four sub-actions (lock, move, export, mark complete) could double-apply on re-run.</div>
+            <div class="finding-fix"><strong>Fix:</strong> define what a checkpoint is (recommend per-stage from §9's stage list) and require each FR-15 sub-action to be individually idempotent/skippable-if-done.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Scope honesty</h2>
+          <span class="verdict-pill verdict-adequate">adequate</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>Omissions are largely explicit and do real work. §5.2 Out of Scope and §5.3 Future Considerations (with "leave seams") are clear and prevent gold-plating; §3 restates the non-goals; §13 surfaces assumptions in table form. Open-items density (6 build-time verifications) is appropriate for demo stakes.</p>
+            <p>The gap: §8 explicitly sets out to cover edges (title mismatch, rename re-trigger, concurrency, <em>late feedback after Done</em>, ambiguous PRD, loop-gating) yet is silent on the two most obvious human-gate edges. Both gates are specified only for the happy <strong>Done</strong> transition (FR-12, FR-14); non-Done terminal transitions (Rejected / Won't Do / Duplicate), reassignment, and "human never acts" are undefined, and there are no timeouts/SLAs anywhere — so a run can stall indefinitely. Because §8 covers lesser edges, this reads as oversight, not a declared decision. <em>(Note: this dimension is graded adequate per its overall honesty, but it carries the high finding below.)</em></p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-high">high</span>
+              <h3 class="finding-title">Only the happy "Done" transition is handled at both human gates; rejection, abandonment, and stalls silently unhandled</h3>
+              <span class="finding-location">§6.1 FR-12/FR-14; §8</span>
+            </header>
+            <div class="finding-note">Non-Done terminal transitions have no defined behavior and there are no timeouts/SLAs, so the flow can deadlock; §8 covers lesser edges but not these, so the omission reads as an oversight rather than a decision.</div>
+            <div class="finding-fix"><strong>Fix:</strong> add EH cases for non-Done gate transitions and a stall/timeout escalation to the admin, or explicitly declare "only the Done transition is handled; other transitions and stalls are out of demo scope."</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Downstream usability</h2>
+          <span class="verdict-pill verdict-adequate">adequate</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>This matters more here (chain-top). The core is extractable: FR-01–15, NFR-01–11, EH-01–08 are each contiguous and unique; §6.0 gives Terminology, §10 an explicit state schema, §11 a config schema; sections mostly stand alone. Absence of UJs is correct for a headless service and is not a defect.</p>
+            <p>What trips source-extraction: the Functional Requirements numbering jumps <strong>6.2 → 6.7</strong> (no 6.3–6.6); §15.3 references "<strong>§Phase 5/6</strong>" though this PRD defines no phases; "<strong>SSG</strong>" is used throughout and named as a non-goal but never expanded; and minor glossary drift ("UserDoc"/"User Document", "Head of Product"/"Head-of-Product").</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">FR section numbering gap 6.2 → 6.7</h3>
+              <span class="finding-location">§6</span>
+            </header>
+            <div class="finding-note">No §§6.3–6.6; a reader cannot tell whether four requirement subsections were dropped on adoption or the numbering is inherited from the source doc.</div>
+            <div class="finding-fix"><strong>Fix:</strong> renumber 6.7 to 6.3 (or restore the missing subsections if content was dropped).</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Dangling cross-reference "§Phase 5/6"</h3>
+              <span class="finding-location">§15.3</span>
+            </header>
+            <div class="finding-note">No phases exist in this document — a fossil from the larger source plan, unreconciled on adoption.</div>
+            <div class="finding-fix"><strong>Fix:</strong> replace with a concrete anchor (e.g. "during the §12 end-to-end run") or add the referenced phase structure.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">"SSG" never expanded or defined</h3>
+              <span class="finding-location">§5, §6.1 FR-15, §9</span>
+            </header>
+            <div class="finding-note">Central to the publish story and a named non-goal, yet the acronym is never spelled out; an architect must guess "Static Site Generator."</div>
+            <div class="finding-fix"><strong>Fix:</strong> expand on first use and add to §6.0 Terminology.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Glossary drift</h3>
+              <span class="finding-location">§6.0 and throughout</span>
+            </header>
+            <div class="finding-note">"UserDoc"/"User Document" and "Head of Product"/"Head-of-Product" used interchangeably.</div>
+            <div class="finding-fix"><strong>Fix:</strong> pick one canonical form each and normalize.</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <section class="dimension">
+      <details>
+        <summary>
+          <h2>Shape fit</h2>
+          <span class="verdict-pill verdict-strong">strong</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>The PRD matches its product type well. It is a capability/technical spec — Actors &amp; Roles, SHALL-form Functional Requirements, cross-cutting NFRs, Error Handling/Edge/Resume, Data/State, Config Registry, DoD, Deployment — exactly right for a headless multi-agent service where Jira/Confluence are the interface. Neither over-formalized (no forced UJs, no persona theater) nor under-formalized. SMs are operational (1 full run, 100% gated), appropriate for an internal automation tool. The §12 DoD acts as an acceptance checklist that partially compensates for thin per-FR criteria — a good shape choice. §9 correctly labels its implementation guidance "guidance, not prescription." No material findings; minor: some implementation detail lives inline rather than in an <code>addendum.md</code>, acceptable for an adopted chain-top build spec.</p>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <section class="reviewer-section">
+      <details>
+        <summary>
+          <h2>Adversarial review</h2>
+          <span class="reviewer-source">review-adversarial-general.md</span>
+        </summary>
+        <div class="dim-body">
+          <div class="dim-judgment">
+            <p>A cynical pass assuming the spec hides problems. It sharpened rather than shifted the rubric's picture, but surfaced several concrete build-biters and internal contradictions the rubric only implied. Voice preserved; not softened. The adversarial reviewer's own severities are shown; the synthesis reconciled a couple downward (e.g. the no-cap loop, which is human-gated and cannot autonomously run away).</p>
+          </div>
+        </div>
+        <div class="findings-list">
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-high">high</span>
+              <h3 class="finding-title">You specified the gate opening, not the gate saying "no"</h3>
+              <span class="finding-location">§6.1 FR-12/FR-14; §8</span>
+            </header>
+            <div class="finding-note">The whole product is human gates, yet FR-12/FR-14 only wait for a transition <em>to Done</em>. What happens when the Head of Product moves the ticket to "Rejected"? Nothing is written. You wrote an entire §8 and handled "late feedback after Done" but not "the human said NO" — that is not an edge case, it is the second-most-likely outcome of a review gate.</div>
+            <div class="finding-fix"><strong>Fix:</strong> define behavior for every non-Done terminal transition, or declare it out of scope in §8.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-high">high</span>
+              <h3 class="finding-title">No timeouts anywhere, in a product whose pitch is "documentation stops lagging"</h3>
+              <span class="finding-location">§8; §6.1 FR-08/FR-12/FR-14</span>
+            </header>
+            <div class="finding-note">Every gate is "wait for human" with zero escalation. The PM goes on vacation and the run parks in <code>awaiting_review</code> forever. You built a system to fix "documentation lags because it depends on a human's availability" and then made every step depend on a human's availability with no backstop.</div>
+            <div class="finding-fix"><strong>Fix:</strong> add a stall timeout that escalates to the admin (reuse the EH-01 error-comment channel).</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-high">high</span>
+              <h3 class="finding-title">FR-03 asks an LLM to confirm "genuinely a finalized PRD" and gives it nothing to decide with</h3>
+              <span class="finding-location">§6.1 FR-03</span>
+            </header>
+            <div class="finding-note">No definition, no examples, no accuracy bar, no test oracle — and this gate decides whether the entire flow fires. A false positive drafts a public doc from half-baked notes; a false negative pesters a PM about a correct document. "Genuinely" carries the whole feature and is unfalsifiable.</div>
+            <div class="finding-fix"><strong>Fix:</strong> concrete decision rubric + labeled accept/reject fixtures + a demo accuracy expectation.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-high">high</span>
+              <h3 class="finding-title">"No cap until PASS" versus "no runaway loops" — pick one</h3>
+              <span class="finding-location">§6.1 FR-11 vs §7 NFR-09</span>
+            </header>
+            <div class="finding-note">You locked a $6/mo box, demanded LangSmith cost tracing, wrote NFR-09 "no runaway loops," then removed the only cap that matters. A fussy PM drives unbounded Claude spend across unbounded rounds and nothing measures it. NFR-09's parenthetical pointedly covers only the clarification/structure loops, not the redraft loop. <em>(Synthesis note: reconciled to medium — the redraft loop needs a PM comment each round, so it cannot spin autonomously; the real defect is the absence of a round/cost ceiling or metric.)</em></div>
+            <div class="finding-fix"><strong>Fix:</strong> add a soft round/cost ceiling or explicitly accept unbounded cost as a decision.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Idempotency and the rename re-trigger are in direct tension, waved at not solved</h3>
+              <span class="finding-location">§7 NFR-04 vs §8 EH-04</span>
+            </header>
+            <div class="finding-note">NFR-04 "dedupe by entity id"; EH-04 requires the <em>same page id</em> to re-enter the flow after rename. So the dedupe key cannot be the entity id (or the rename never reprocesses), but if it is the event id a genuine duplicate delivery double-processes. EH-04 asserts idempotency "must ensure" no duplicate processing without saying how the two coexist.</div>
+            <div class="finding-fix"><strong>Fix:</strong> specify the dedupe key (event id + a monotonic content/version marker) so deliberate reprocessing-on-update survives dedupe.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">Publishing drops the finished doc into the folder you are watching — self-ingestion</h3>
+              <span class="finding-location">§6.1 FR-15 vs FR-01/FR-02a</span>
+            </header>
+            <div class="finding-note">FR-15 moves the final UserDoc to "the same folder as the source PRD," which FR-01 watches for <code>page-created</code>. The UserDoc title is not <code>final_PRD_...</code>, so FR-02 routes it to FR-02a — opening a rename-request ticket nagging the PM about the document you just published. Every successful publish can spawn a spurious task.</div>
+            <div class="finding-fix"><strong>Fix:</strong> exclude the agent's own published pages from detection (tag/label or path guard), or publish to a folder outside the watched set.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">"PM who created the page" contradicts "PM fixed in config"</h3>
+              <span class="finding-location">§6.1 FR-02a vs §4; §13 Q4</span>
+            </header>
+            <div class="finding-note">§4 says the PM is "Fixed in config"; FR-02a assigns the rename task to "the PM who created the page" (scraped from the Confluence creator field per §13 Q4). If an engineer or the Head of Product creates the page, the task goes to the wrong person — and you are assuming a Confluence account id maps cleanly to a Jira-assignable account, a classic Atlassian footgun.</div>
+            <div class="finding-fix"><strong>Fix:</strong> route rename tasks to the config PM by default; use the creator only as a CC, and specify the identity-mapping source.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">LangSmith is a "Must" and it egresses confidential unreleased-product plans to a third-party SaaS</h3>
+              <span class="finding-location">§7 NFR-01</span>
+            </header>
+            <div class="finding-note">100% LLM-call tracing means PRDs and derived docs for unreleased features leave to an external vendor. Not one word about data governance, redaction, retention, or whether it is even permitted.</div>
+            <div class="finding-fix"><strong>Fix:</strong> add a data-governance note (allowed data classes, retention, redaction) or gate tracing content behind a policy switch.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">The self-critique pass proves nothing</h3>
+              <span class="finding-location">§6.1 FR-05; §9</span>
+            </header>
+            <div class="finding-note">Same model, one pass, against a SKILL.md that §9 admits does not exist yet and "need not be perfect." No measured improvement, no rejection threshold. A ritual dressed as a control.</div>
+            <div class="finding-fix"><strong>Fix:</strong> define what the critique checks and what it rejects; ideally log a before/after signal to LangSmith.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">§§6.3–6.6 are missing and nobody noticed</h3>
+              <span class="finding-location">§6</span>
+            </header>
+            <div class="finding-note">Requirements go 6.0, 6.1, 6.2, then leap to 6.7. Either requirements were deleted during the excerpt from <code>PRD_Agent_Flow.md</code> and never renumbered, or content never made it across. A build spec with holes in its own numbering earns zero benefit of the doubt about completeness.</div>
+            <div class="finding-fix"><strong>Fix:</strong> confirm no content is missing and renumber.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-medium">medium</span>
+              <h3 class="finding-title">"§Phase 5/6" points at nothing — the excerpt seam is showing</h3>
+              <span class="finding-location">§15.3</span>
+            </header>
+            <div class="finding-note">There are no phases in this document. Proof the adoption was not proofread — so what else did not survive the copy?</div>
+            <div class="finding-fix"><strong>Fix:</strong> repoint to a real anchor and sweep the doc for other fossils.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">EH-02 resume is hand-waved exactly where it is dangerous</h3>
+              <span class="finding-location">§8 EH-02; §6.1 FR-15; §10</span>
+            </header>
+            <div class="finding-note">"Re-run the failed step from the last good checkpoint" — but "step" and "checkpoint" are undefined, and FR-15 is four actions. Re-run after lock-and-move but before export and, absent stated idempotency, you re-lock, re-move, or double-export.</div>
+            <div class="finding-fix"><strong>Fix:</strong> define checkpoint granularity and require per-sub-action idempotency.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">"Lock" is not a lock</h3>
+              <span class="finding-location">§6.1 FR-15</span>
+            </header>
+            <div class="finding-note">Confluence page restrictions govern who may edit, not whether content is frozen. Space admins and the agent's own account retain edit rights; no version pinning. "Functional equivalent of lock version" oversells the guarantee.</div>
+            <div class="finding-fix"><strong>Fix:</strong> reword to the actual guarantee, or add explicit version pinning if a true freeze is required.</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">Headline success metric is a sample size of one</h3>
+              <span class="finding-location">§3 vs §12</span>
+            </header>
+            <div class="finding-note">"1 successful full run" declares victory on a single happy path — no error-path validation, no repeatability. Meanwhile §12's DoD is far more demanding. The metric is weaker than your own Definition of Done.</div>
+            <div class="finding-fix"><strong>Fix:</strong> align the success metric with the DoD (include at least one error/resume path).</div>
+          </article>
+          <article class="finding">
+            <header>
+              <span class="badge badge-sev-low">low</span>
+              <h3 class="finding-title">FR-04 transitions to Done without checking state or legality</h3>
+              <span class="finding-location">§6.1 FR-04; §13 Q1</span>
+            </header>
+            <div class="finding-note">A ticket already in Done, or one with no direct-to-Done transition from its current state (the exact risk §13 Q1 flags), will error or no-op. FR-04 assumes the transition always exists and applies; §13 admits the assumption, FR-04 does not defend against it.</div>
+            <div class="finding-fix"><strong>Fix:</strong> guard the transition (skip if already Done; resolve the legal transition path at runtime).</div>
+          </article>
+        </div>
+      </details>
+    </section>
+
+    <div class="mechanical">
+      <h3>Mechanical notes</h3>
+      <ul>
+        <li><strong>ID continuity:</strong> FR-01–15, NFR-01–11, EH-01–08 are contiguous and unique — but §6 subsection numbering skips 6.3–6.6 (jumps 6.2 → 6.7), the one real continuity break.</li>
+        <li><strong>Broken cross-reference:</strong> "§Phase 5/6" (§15.3) resolves to nothing — no phases defined. All other cross-refs checked resolve (§6.2, §6.7, §8, §10, §15.4).</li>
+        <li><strong>Undefined term:</strong> "SSG" used throughout, never expanded; not in §6.0 Terminology.</li>
+        <li><strong>Glossary drift:</strong> "UserDoc" vs "User Document"; "Head of Product" vs "Head-of-Product".</li>
+        <li><strong>Assumptions convention:</strong> no inline <code>[ASSUMPTION: …]</code> tags or an Assumptions Index; assumptions captured in the §13 Open-Questions table instead — a legitimate alternative form for an adopted PRD. Noted, not penalized.</li>
+        <li><strong>Required sections:</strong> all expected sections for a chain-top technical capability spec are present; no UJ/persona sections — correct for this headless shape.</li>
+      </ul>
+    </div>
+
+    <footer class="report-footer">
+      <div class="meta">
+        <span>Rubric: .claude/skills/bmad-prd/assets/prd-validation-checklist.md</span>
+        <span>Generated: 2026-07-23T11:34:42Z</span>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

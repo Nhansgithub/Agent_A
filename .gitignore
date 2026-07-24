@@ -1,0 +1,22 @@
+# Secrets — AD-4: credentials are supplied by env reference and NEVER committed.
+.env
+.env.*
+!.env.example
+
+# Runtime state — the single durable store (AD-2/AD-11) and the Markdown exports (FR-15).
+# These are backed up off-box by litestream (AD-23), never by git.
+*.db
+*.db-shm
+*.db-wal
+/data/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
