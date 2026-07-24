@@ -11,51 +11,39 @@
 
 ## Where the build is
 
-**Epics 1 (foundation) & 2 (detection/confirmation) are COMPLETE. 18 / 39 stories DONE.**
-Test suite: **341 passed**, `ruff check` clean, **5/5 import-linter contracts kept**.
+**All six epics are code-complete. 38 / 39 stories DONE; S6.4 (live deploy) is PARTIAL.**
+Test suite: **451 passed**, `ruff check` clean, **5/5 import-linter contracts kept**. The whole
+service composes and runs offline (`/health` 200; unauthenticated webhook/admin → 401).
 
-- **Epic 1** — scaffold + pinned deps, config registry, single SQLite store + §9 stage machine,
-  webhook ingress (validate→parse→route→dedupe→admit), both Atlassian adapters, the in-invocation
-  LangGraph orchestrator + serial queue, and the LangSmith tracing harness.
-- **Epic 2** — detection guard (folder + label + agent-account, AD-10), title gate, the Classifier
-  agent + its `SKILL.md`, the held-out eval harness (dev+holdout fixtures, ×3, confusion matrix,
-  flake budget), the ticket manager (FR-04 adopt/search/create + AD-13 drive-to-done + the AD-15
-  never-transition-a-gate interlock), the FR-02a rename-request path, and AD-12 identity resolution.
-  All wired into the orchestrator as the `detected → confirmed → prd_ticket_done → drafted` handlers.
+The full happy path runs end to end against fakes:
+`detect → title-gate → classify → tracking ticket → draft + self-critique → publish draft → Review
+ticket + framed request → [PM feedback ⇄ revise loop] → PASS → Publishing ticket → [Head of Product
+Done] → restrict + move + export .md → complete`, plus every hardening path (rename request, cross-org
+identity, structure-confirm, clarification, error+resume, reconcile/liveness, idempotent publish).
 
-**One PARTIAL:** S2.4's *live* 0-FP/0-FN classifier measurement needs the Anthropic key (BLOCKERS
-B-1). The harness and fixtures are done and offline-tested; only the real Claude accuracy run waits.
-Run it later with `.venv/bin/python scripts/run_classifier_eval.py`.
+**Two things remain, both gated on credentials/infra (not code):**
+1. **S2.4 — live classifier eval** (Anthropic key, BLOCKERS B-1): `.venv/bin/python
+   scripts/run_classifier_eval.py` must show 0 FP / 0 FN on the holdout set ×3. The harness + fixtures
+   are done and unit-tested; only the real Claude run is pending.
+2. **S6.4 — deploy + end-to-end demo run** (Droplet + Atlassian tenant + Spaces, B-3/B-4/B-5):
+   follow `deploy/README.md`. Everything it needs is built.
 
 ## ▶ Next Action
 
-**Epic 6 — Resilience, Recovery & Operations** (mostly hardening + the one deploy story), **plus the
-production composition root** that wires the real context object the handlers expect.
+**Waiting on the user.** Nhan is completing third-party setup via `SETUP-GUIDE.md` and will send a
+message when done. When credentials land:
 
-Build order (offline-buildable first, gated last):
-- **6.1** Error surfacing + admin resume (`app/agents/error_handler.py`): on any `AgentError` after
-  retries, the orchestrator already sets `stage=error` + preserves `last_good_checkpoint`; the Error
-  handler posts the EH-01 comment (plain error + fix + `@admin` + the literal `@agent resume`
-  instruction + correlation id). Resume = an admin comment containing `@agent resume`/`fixed` re-runs
-  `last_good_checkpoint` (dedupe-guarded so a duplicate can't double-resume).
-- **6.2** Reconciler/liveness sweep (`app/admin/`, AD-22): authenticated localhost endpoint the cron
-  hits; alerts stale parked/error runs once per threshold (`liveness_alerted_at`) and re-polls the two
-  gate tickets, feeding a found Done as an *input* (never a stage write; the collision defenses are
-  the serial queue + the AD-9 dedupe key + idempotent advance).
-- **6.7** Content-gating flag — already threaded (`trace_content`); add the verification test + wire it.
-- **Composition root** (`app/main.py` + a context module): build the real per-run context (tenant
-  config + adapters + agents + repository) that satisfies the Detection/Authoring/Review/Publish
-  context protocols, and register all stage handlers. Wire the FastAPI webhook endpoint (Epic 1
-  ingress) → orchestrator `advance` / `apply_pm_comment` / `apply_gate_done`.
-- **6.3** Off-box backup (`deploy/`, AD-23): litestream config + restore doc. **PARTIAL** — needs DO
-  Spaces (BLOCKERS B-4).
-- **6.5** 1 GB envelope hardening: Dockerfile (slim), Caddyfile, swap+firewall scripts, single worker.
-- **6.4** Deploy + end-to-end run: **PARTIAL/BLOCKED** — needs the Droplet + live tenant (B-3/B-4/B-5).
-- **6.6** Config-only modifiability: add a second tenant to a test registry, prove routing; the
-  NFR-05 grep test already guards literal isolation.
+1. Create `.env` + `config/registry.yaml` (SETUP-GUIDE Parts 1-6); run
+   `scripts/verify_setup.py` until green.
+2. Run `scripts/run_classifier_eval.py` — confirm the 0-FP/0-FN holdout bar (S2.4). If a fixture
+   fails, tune the classifier `SKILL.md` against the **dev** set only (never the holdout).
+3. Build the image in CI (`.github/workflows/build-image.yml`), provision the Droplet
+   (`deploy/provision.sh`), deploy (`deploy/README.md`), register the webhooks (SETUP-GUIDE Part 7).
+4. Create a `final_PRD_<name>` page and walk the two gates — the §12 Definition of Done.
 
-Reminder: Story 2.4's *live* classifier eval and the whole live end-to-end run wait on credentials.
-Build and unit-test everything offline; mark the live-only pieces PARTIAL with a clear note.
+Until then there is no code work that is not blocked. If asked to keep improving offline, candidates:
+broaden the classifier fixture set, add more markdown-conversion edge cases, or an end-to-end
+integration test that drives the whole flow through the composition with fakes injected.
 
 ## Environment notes
 

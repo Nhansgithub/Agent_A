@@ -178,6 +178,30 @@ class Orchestrator:
                 stopped_reason=f"gate Done on {issue_key} ignored at stage {state.stage.value}",
             )
 
+    async def apply_admin_resume(self, prd_id: str) -> RunResult:
+        """EH-02 — an admin asked to resume an errored run; re-run from the failed stage.
+
+        Re-enters at `last_good_checkpoint` (the failed stage), never the whole flow. Only acts on a
+        run that is actually in `error`; a resume on a healthy run is a no-op. Duplicate-delivery
+        protection is the webhook layer's dedupe guard (AD-9), so this need not de-duplicate itself.
+        """
+        async with self._lock:
+            state = self._repository.state.require(prd_id)
+            if state.stage is not Stage.ERROR:
+                return RunResult(
+                    prd_id,
+                    state.stage,
+                    stopped_reason=f"resume ignored: run is at {state.stage.value}, not error",
+                )
+
+            checkpoint = state.last_good_checkpoint or Stage.DETECTED
+            # Return to the failed stage; the next _advance_unlocked runs it. Clears the error and
+            # the liveness alert (advance_stage does this for any non-error target).
+            self._repository.state.advance_stage(
+                prd_id, checkpoint, queue_status=QueueStatus.IN_PROGRESS
+            )
+            return await self._advance_unlocked(prd_id)
+
     async def _act_on_feedback(self, prd_id, state, context, decision, outcome) -> None:
         """Persist the routing outcome. The *decision* is the LLM's; the *routing* is deterministic."""
         if outcome.action is FeedbackAction.APPLY_FEEDBACK:

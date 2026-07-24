@@ -1,0 +1,10 @@
+# AD-22 reconcile/liveness sweep — the chosen mechanism: system cron hitting the authenticated
+# localhost admin endpoint. No always-on Python scheduler process competing for RAM (AD-21).
+#
+# Install with:  crontab -l | cat - deploy/reconcile.cron | crontab -
+# The ADMIN_API_TOKEN must match the one in the service's .env (system.admin_token_ref).
+#
+# Every 15 minutes: alert on stale parked/error runs (once per threshold) and reconcile-poll the two
+# gate tickets, recovering any gate-Done a dropped webhook missed. This adds recoverability, NOT a
+# timeout — parked runs still park indefinitely (AD-22).
+*/15 * * * * curl -fsS -m 60 -X POST http://127.0.0.1:8000/admin/reconcile -H "X-Admin-Token: ${ADMIN_API_TOKEN}" >> /var/log/agent-reconcile.log 2>&1

@@ -418,3 +418,54 @@ review loop → PASS → publish gate → publish → complete — now runs end 
 liveness/reconcile sweep, AD-23 off-box backup, the 1 GB deploy + end-to-end run, config-only
 modifiability check, content-gating flag). This is the epic with the most human/3rd-party gates
 (BLOCKERS B-3/B-4/B-5), so several stories will land PARTIAL pending the live tenant and Droplet.
+
+---
+
+## 2026-07-24 · Session 1 (cont.) — Epic 6 + composition root · **ALL CODE COMPLETE**
+
+Hardening, operations, and the production wiring that turns the tested pieces into a running service.
+
+### Epic 6
+- **6.1 Error + resume** (`app/agents/error_handler.py`): posts exactly one EH-01 comment on the
+  ticket closest to the failure (review/publishing/tracking), with plain error + fix + `@admin`
+  mention + literal `@agent resume` instruction + correlation id. `Orchestrator.apply_admin_resume`
+  re-runs `last_good_checkpoint` only; a resume on a healthy run is a no-op.
+- **6.2 Reconciler/liveness** (`app/admin/`): `Reconciler.sweep()` alerts stale parked/error runs
+  once per threshold (`liveness_alerted_at`) and reconcile-polls the two gate tickets, feeding a found
+  Done to `apply_gate_done` as an **input** — never a stage write (AD-2), agent never transitions a
+  gate (AD-15). Exposed via an authenticated localhost `/admin/reconcile` for the cron sweep.
+- **6.3 Backup** (`deploy/litestream.yml` + restore doc): built as an artifact; live Spaces
+  replication needs B-4.
+- **6.4 Deploy** (`deploy/` + CI): Dockerfile (slim, non-root, single worker), provision.sh (swap +
+  443/22 firewall), Caddyfile (proxies only `/webhooks` + `/health`, never `/admin`), litestream,
+  cron, and two GitHub workflows (CI + build-image-off-box). **The live deploy + end-to-end run is
+  PARTIAL — needs the Droplet + tenant (B-3/B-4/B-5).**
+- **6.5 1 GB envelope**: encoded in the Dockerfile/provision artifacts + asserted by tests.
+- **6.6 Config-only modifiability**: tests prove a 2nd tenant routes and a PM swap is one field.
+- **6.7 Content-gating**: `trace_content` — metadata-only by default; content never egressed unless
+  a tenant opts in (tested).
+
+### Composition root (the production wiring)
+- `app/orchestrator/context.py` — the real per-run `RunContext` satisfying every handler protocol.
+- `app/composition.py` — reads config, resolves credentials, builds per-tenant adapters (cached), the
+  shared LLM client + tracer, the six agents, and registers **every** advancing-stage handler
+  (a test asserts none is missing). Lazy construction, so building the wiring needs no credentials.
+- `app/webhooks/router.py` — maps each authenticated+deduped event to the right orchestrator call
+  (page → advance, PM comment → apply_pm_comment / admin resume, gate Done → apply_gate_done), then
+  surfaces any resulting error (EH-01). Returns 2xx for handled drops so Atlassian doesn't retry.
+- `app/main.py` — `create_app()` factory with a lifespan handler; serves `/health` even without
+  config, mounts webhook + admin routes when config is present.
+
+**Smoke-tested the running app:** `/health` → 200; unauthenticated webhook → 401; admin without
+token → 401; all routes mounted. The walking skeleton is fully assembled.
+
+**All 5 architecture contracts still hold** with the composition root, webhook router, admin endpoint,
+and wiring added — 95 files, 354 dependencies analyzed, 0 broken.
+
+**Suite: 451 passed. ruff clean. 5/5 contracts.**
+
+### Status
+**38 / 39 stories DONE in code** (S6.4 is PARTIAL — the live deploy). Two live-only verifications wait
+on credentials/infra: the S2.4 classifier 0-FP/0-FN eval (Anthropic key, B-1) and the S6.4 end-to-end
+demo run (Droplet + tenant, B-3/B-4/B-5). Everything is built and unit-tested offline; when the
+credentials arrive, the remaining work is running two commands and walking the two gates.

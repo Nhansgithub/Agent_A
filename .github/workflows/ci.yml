@@ -1,0 +1,32 @@
+# CI — run the offline test suite + the architecture and licensing gates on every push.
+#
+# This is the fast gate. The image build (build-image.yml) is separate so the demo's "build off the
+# box" rule (AD-21) is satisfied by CI, not by the 1 GB Droplet.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install (pinned runtime + dev extras)
+        run: pip install -e ".[dev]"
+      - name: Ruff (lint + format check)
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Architecture contracts (AD-1/2/4/6)
+        run: lint-imports
+      - name: Tests (no network, no credentials)
+        run: pytest -q
+      # The classifier holdout eval (AD-17, Story 2.4) is NOT run here — it needs the Anthropic key.
+      # Run it in a gated job with the secret, or manually: scripts/run_classifier_eval.py

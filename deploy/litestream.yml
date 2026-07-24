@@ -1,0 +1,26 @@
+# litestream — continuous off-box replication of the single SQLite store (AD-23).
+#
+# Run state (last_good_checkpoint, processed_events, recorded external ids) is authoritative ONLY on
+# the Droplet disk (AD-2/AD-11). Losing that disk mid-run would cause double-create or re-publish on
+# webhook redelivery — so litestream streams the SQLite WAL to DigitalOcean Spaces (S3-compatible)
+# continuously. Pin >= 0.5.4 (auto-disables aws-chunked encoding, which fixes DO Spaces uploads).
+#
+# Runs as a small host process / sidecar inside the AD-21 memory envelope.
+#
+# Credentials come from the environment (LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY),
+# never inline — same discipline as every other secret (AD-4).
+
+dbs:
+  - path: /data/state.db
+    replicas:
+      - type: s3
+        # DigitalOcean Spaces is S3-compatible. Replace region/bucket with yours.
+        endpoint: https://REGION.digitaloceanspaces.com
+        bucket: REPLACE_SPACES_BUCKET
+        path: leapxpert-agent-a/state
+        region: REGION
+        # Stream the WAL continuously; a 10s sync keeps the replica within seconds of the disk.
+        sync-interval: 10s
+        # Keep a day of point-in-time snapshots for restore.
+        retention: 24h
+        snapshot-interval: 1h

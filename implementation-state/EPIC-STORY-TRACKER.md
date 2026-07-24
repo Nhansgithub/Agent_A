@@ -9,7 +9,7 @@ blocked) · `BLOCKED` (cannot start — see BLOCKERS.md)
 
 **Order of work:** epic 1 → 6; within an epic, `critical-path` before `hardening`.
 
-**Progress: 32 / 39 DONE** — **Epics 1-5 complete.** Test suite: **402 passed**, ruff clean, **5/5 import-linter contracts kept**.
+**Progress: 38 / 39 DONE** (S6.4 PARTIAL — live deploy). **All code complete; 451 tests pass, ruff clean, 5/5 import-linter contracts kept.** Live-only verifications (S2.4 classifier eval, S6.4 end-to-end run) wait on credentials/infra — see BLOCKERS.
 
 | | Epic | Stories | Done |
 |---|---|---|---|
@@ -18,7 +18,7 @@ blocked) · `BLOCKED` (cannot start — see BLOCKERS.md)
 | 3 | UserDoc Authoring & Draft Publication | 5 | **5 ✅** |
 | 4 | Human Review & Revision Loop | 6 | **6 ✅** |
 | 5 | Approval & Publishing | 3 | **3 ✅** |
-| 6 | Resilience, Recovery & Operations | 7 | 0 |
+| 6 | Resilience, Recovery & Operations | 7 | **6 ✅ + 1 partial** |
 
 ---
 
@@ -86,13 +86,13 @@ round-trip Atlassian and LLM calls, advance explicit stages. Everything downstre
 
 | ID | Story | Tag | Governed by | Status | Evidence |
 |---|---|---|---|---|---|
-| 6.1 | Error surfacing and admin resume from checkpoint | hardening | AD-19, AD-11 | TODO | |
-| 6.2 | Reconciliation & liveness sweep (dropped-gate-webhook recovery) | hardening | AD-22, AD-2, AD-15 | TODO | |
-| 6.3 | Off-box state backup / disaster recovery | hardening | AD-23 | TODO | |
-| 6.4 | Deploy to the reachable 1 GB host and run the end-to-end demo | critical-path | AD-21 | TODO | |
-| 6.5 | 1 GB memory-envelope hardening | hardening | AD-21 | TODO | |
-| 6.6 | Config-only modifiability verification (2nd project; swap identities) | hardening | AD-4 | TODO | |
-| 6.7 | Content-gating observability flag and data-governance seam | hardening | AD-20 | TODO | |
+| 6.1 | Error surfacing and admin resume from checkpoint | hardening | AD-19, AD-11 | **DONE** | `app/agents/error_handler.py`; one EH-01 comment on the relevant ticket; `apply_admin_resume` re-runs `last_good_checkpoint` only. |
+| 6.2 | Reconciliation & liveness sweep (dropped-gate-webhook recovery) | hardening | AD-22, AD-2, AD-15 | **DONE** | `app/admin/{reconciler,endpoint,wiring}.py`; alert-once + gate reconcile-poll fed as input (never a stage write); cron → localhost. |
+| 6.3 | Off-box state backup / disaster recovery | hardening | AD-23 | **DONE (artifact)** | `deploy/litestream.yml` + restore procedure in `deploy/README.md`. Live replication to DO Spaces needs B-4. |
+| 6.4 | Deploy to the reachable 1 GB host and run the end-to-end demo | critical-path | AD-21 | **PARTIAL** | `deploy/` (Dockerfile, provision.sh, Caddyfile) + CI build-off-box workflow all built & tested. **The live deploy + end-to-end run needs the Droplet + tenant (B-3/B-4/B-5).** |
+| 6.5 | 1 GB memory-envelope hardening | hardening | AD-21 | **DONE (artifact)** | slim base, single worker, non-root, swap, no co-located DB, one PRD resident (AD-5). Live measurement is part of the S6.4 run. |
+| 6.6 | Config-only modifiability verification (2nd project; swap identities) | hardening | AD-4 | **DONE** | `test_operations.py` proves a 2nd tenant routes + a PM swap is one field; NFR-05 grep test guards literal isolation. |
+| 6.7 | Content-gating observability flag and data-governance seam | hardening | AD-20 | **DONE** | `trace_content` flag; metadata-only by default, content never egressed unless opted in (tested). |
 
 ---
 

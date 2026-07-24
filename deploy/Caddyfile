@@ -1,0 +1,30 @@
+# Caddy reverse proxy + automatic TLS (AD-21, PRD §15.4).
+#
+# Caddy terminates HTTPS on :443 and proxies ONLY the public webhook path to the app. The app's
+# /admin/* endpoints are deliberately NOT proxied — they are reached over localhost by the cron
+# reconciler (AD-22), never from the internet.
+#
+# Replace `agent.example.com` with your domain (or use the Droplet IP with `tls internal` for a
+# quick demo without a domain). Caddy auto-provisions a Let's Encrypt cert for a real domain.
+
+agent.example.com {
+	encode gzip
+
+	# Only the webhook endpoint is public. Everything else (docs, admin) is not exposed.
+	handle /webhooks/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# A public health check for uptime monitoring is fine; it reveals nothing.
+	handle /health {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+
+	log {
+		output file /var/log/caddy/access.log
+	}
+}
