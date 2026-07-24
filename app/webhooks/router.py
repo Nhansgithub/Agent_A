@@ -111,6 +111,16 @@ async def _dispatch_page(composition: Composition, event: ConfluencePageEvent, t
     from app.domain.state import PrdState
 
     event = await _resolve_version(composition, event, tenant)
+
+    if _is_agent_output(event, tenant):
+        # AD-10 at the door. A Confluence Automation trigger is space-wide, so it also fires for the
+        # agent's OWN draft and published pages. Detection would decline them a moment later, but
+        # only after `admit` had already written a state row — leaving a permanent `detected` row per
+        # agent page. Refusing before admission keeps the single durable store free of runs that can
+        # never advance. Cheap: it reads what the version fetch already returned.
+        logger.info("page %s is the agent's own output; not admitted (AD-10)", event.page_id)
+        return None
+
     key = dedupe_key_for(tenant.project_id, event)
 
     existing = repository.state.get(event.page_id)
@@ -156,7 +166,30 @@ async def _resolve_version(composition: Composition, event: ConfluencePageEvent,
         version_number=page.version,
         title=event.title or page.title,
         container_id=event.container_id or page.parent_id,
+        # `get_page` already asks for labels, so carrying them costs nothing and lets the AD-10
+        # guard below decide without a second call.
+        labels=event.labels or tuple(page.labels),
     )
+
+
+def _is_agent_output(event: ConfluencePageEvent, tenant) -> bool:
+    """Positively identify a page the agent itself produced (AD-10 b).
+
+    Two signals, both certain — never a heuristic that could refuse a real PRD:
+
+    * the reserved ``agent-generated`` label, stamped on every page the Publisher creates;
+    * the page sits directly in this tenant's *draft* or *published* folder, which only the agent
+      writes to.
+
+    A page whose container is unknown, or which is nested under something else, is **not** judged
+    here — it is admitted and detection makes the full call with an ancestors lookup.
+    """
+    from app.config.constants import AGENT_GENERATED_LABEL
+
+    if AGENT_GENERATED_LABEL in event.labels:
+        return True
+    agent_folders = {tenant.confluence_draft_folder_id, tenant.confluence_published_folder_id}
+    return bool(event.container_id) and event.container_id in agent_folders
 
 
 async def _dispatch_comment(composition: Composition, event: JiraCommentEvent, tenant):

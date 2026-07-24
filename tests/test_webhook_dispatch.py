@@ -277,3 +277,73 @@ async def test_a_later_edit_of_the_same_page_re_enters(tmp_path) -> None:
     await _dispatch(composition, Accepted(event=unversioned_page_event(), tenant=tenant))
 
     assert ("advance", "page-1") in composition.orchestrator.calls, "the rename did not re-enter"
+
+
+# -- AD-10 at the door: a space-wide Automation rule also fires on the agent's own pages ---------
+
+
+def agent_page_event(*, labels=(), container_id="folder-source-1"):
+    from app.domain.events import ConfluencePageEvent, EventType
+
+    return ConfluencePageEvent(
+        event_type=EventType.CONFLUENCE_PAGE_CREATED,
+        page_id="draft-1",
+        version_number=1,
+        title="Widget Guide",
+        container_id=container_id,
+        labels=labels,
+    )
+
+
+async def test_a_page_carrying_the_reserved_label_is_never_admitted() -> None:
+    """The agent's own draft must not become a run that can never advance."""
+    composition, tenant = make()
+
+    await _dispatch(
+        composition,
+        Accepted(event=agent_page_event(labels=("agent-generated",)), tenant=tenant),
+    )
+
+    assert composition.repository.state.get("draft-1") is None
+    assert composition.orchestrator.calls == []
+
+
+async def test_a_page_in_the_draft_folder_is_never_admitted() -> None:
+    composition, tenant = make()
+
+    await _dispatch(
+        composition, Accepted(event=agent_page_event(container_id="folder-draft-1"), tenant=tenant)
+    )
+
+    assert composition.repository.state.get("draft-1") is None
+
+
+async def test_a_page_in_the_published_folder_is_never_admitted() -> None:
+    composition, tenant = make()
+
+    await _dispatch(
+        composition,
+        Accepted(event=agent_page_event(container_id="folder-published-1"), tenant=tenant),
+    )
+
+    assert composition.repository.state.get("draft-1") is None
+
+
+async def test_a_real_prd_in_the_source_folder_is_still_admitted() -> None:
+    """The guard must be certain, never a heuristic that could refuse a genuine PRD."""
+    composition, tenant = make()
+
+    await _dispatch(composition, Accepted(event=page_event(), tenant=tenant))
+
+    assert composition.repository.state.get("page-1") is not None
+    assert ("advance", "page-1") in composition.orchestrator.calls
+
+
+async def test_a_page_with_an_unknown_container_is_left_to_detection() -> None:
+    """Nested pages have a page (not a folder) as parent — admit and let detection decide."""
+    composition, tenant, _ = make_with_confluence(version=3)
+    event = agent_page_event(container_id="some-other-page")
+
+    await _dispatch(composition, Accepted(event=event, tenant=tenant))
+
+    assert composition.repository.state.get("draft-1") is not None
