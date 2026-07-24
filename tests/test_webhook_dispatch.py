@@ -52,6 +52,9 @@ class FakeComposition:
     def _adapters_for(self, tenant):  # only reached on the error-surfacing path
         raise AssertionError("adapters should not be needed in these tests")
 
+    def stash_event(self, prd_id, event):  # no-op for routing tests
+        pass
+
 
 @dataclass
 class Accepted:

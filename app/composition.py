@@ -57,6 +57,13 @@ class Composition:
         self._adapters: dict[str, _TenantAdapters] = {}
         self._agent_account_cache: dict[str, str] = {}
         self._orchestrator: Orchestrator | None = None
+        # Per-run triggering events, stashed by the webhook layer before it calls advance() so the
+        # context carries the true page creator/labels without a live re-fetch. Consumed once.
+        self._pending_events: dict[str, object] = {}
+
+    def stash_event(self, prd_id: str, event: object) -> None:
+        """Hand the triggering event to the next context built for this run."""
+        self._pending_events[prd_id] = event
 
     # -- lazily-built singletons ---------------------------------------------------------------
 
@@ -150,6 +157,7 @@ class Composition:
             ticket_manager=ticket_manager,
             identity=IdentityResolver(adapters.jira),
             agent_account_cache=self._agent_account_cache,
+            page_event=self._pending_events.pop(state.prd_id, None),
         )
 
     @staticmethod

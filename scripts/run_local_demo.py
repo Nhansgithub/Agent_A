@@ -138,7 +138,7 @@ async def create_and_start() -> None:
 
     # Admit the PRD to the flow (what the webhook layer's admission step does).
     from app.domain.dedupe import DedupeKey
-    from app.domain.events import EventType
+    from app.domain.events import ConfluencePageEvent, EventType
     from app.domain.state import PrdState
 
     if repo.state.get(page_id) is None:
@@ -146,6 +146,24 @@ async def create_and_start() -> None:
         repo.admit(
             key, PrdState(prd_id=page_id, project_id=tenant.project_id, prd_title=DEMO_TITLE)
         )
+
+    # Stand in for the webhook event. In production a human PM uploads the PRD with their own
+    # account; this demo's PRD page was physically created with the agent's own token (only one is
+    # available), which detection's AD-10 self-author guard would (correctly) decline. So we present
+    # the event as authored by the configured PM — the real "a human uploaded this" scenario — which
+    # is exactly what a live webhook payload carries. Detection then runs its real folder/label/
+    # author checks against a faithful input.
+    composition.stash_event(
+        page_id,
+        ConfluencePageEvent(
+            event_type=EventType.CONFLUENCE_PAGE_CREATED,
+            page_id=page_id,
+            version_number=1,
+            title=DEMO_TITLE,
+            creator_account_id=tenant.pm_account_id,
+            container_id=tenant.confluence_source_folder_id,
+        ),
+    )
 
     result = await composition.orchestrator.advance(page_id)
 

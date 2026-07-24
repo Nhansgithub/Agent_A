@@ -112,6 +112,10 @@ class RunContext:
         page = await self.confluence.get_page(page_id)
         return self.confluence.storage_to_markdown(page.body_storage)
 
+    def page_url(self) -> str:
+        """The source PRD page's URL (for the tracking-ticket / rename-task links)."""
+        return f"{self._base_url}/wiki/pages/viewpage.action?pageId={self.prd_id}"
+
     def draft_page_url(self, page_id: str) -> str:
         return f"{self._base_url}/wiki/pages/viewpage.action?pageId={page_id}" if page_id else ""
 

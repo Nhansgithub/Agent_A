@@ -111,6 +111,9 @@ async def _dispatch_page(composition: Composition, event: ConfluencePageEvent, t
         )
         if admitted is None:
             return None  # lost the admission race to a concurrent duplicate
+    # Hand the parsed event to the context so detection sees the true creator/labels/container
+    # without a live re-fetch (and correctly authored-by the real uploader, not the agent).
+    composition.stash_event(event.page_id, event)
     return await composition.orchestrator.advance(event.page_id)
 
 
