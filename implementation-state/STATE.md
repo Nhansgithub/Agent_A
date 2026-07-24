@@ -60,47 +60,65 @@ AMS-12. Flip the flag back to `true` after any upgrade to Standard.
 
 ## ▶ Next Action
 
-**Deploy prep is done (2026-07-24).** The `deploy/` assets had never been executed; reviewing them
-first surfaced four defects, now fixed (D-23): no `.dockerignore` (the build context carried `.env`
-and the live DB), `provision.sh` installed neither Docker nor Caddy, the AD-22 reconcile cron would
-have 401'd on every sweep, and `/health` could not distinguish "alive" from "alive but no config
-mounted". `config/registry.yaml` is now gitignored (D-24). 471 tests pass.
+**DEPLOYED AND LIVE (2026-07-24) — `https://poetroastery.com`.** Droplet 143.198.218.143
+(Ubuntu 24.04, 1 GB). Verified externally: `/health` → `{"status":"ok","config":"loaded",
+"webhooks":"mounted"}`, valid Let's Encrypt cert (TLS-ALPN-01; port 80 stays closed), unsigned
+webhooks 401, `/admin` + `/docs` not proxied, port 8000 unreachable, reconcile cron 200, and **a real
+Jira `comment_created` webhook delivered and accepted (200)** — the webhook ingress layer's first
+live run. Container: 59 MiB of a 768 MiB cap (AD-21). Image `ghcr.io/nhansgithub/agent_a`, built
+off-box by GitHub Actions; CI green (471 tests).
 
-**Blocked on Nhan for three things:** the Droplet IP, the domain hostname (A record pointed at it),
-and a GitHub repo + remote so Actions can build the image off-box. See below.
+Six defects were found and fixed during deploy — three of them only a real box could surface
+(D-23/D-25): lowercase GHCR tag, pytest `pythonpath` (CI collected nothing), unreadable CI logs,
+`/data` ownership vs the non-root container uid, Caddy file logging under `ProtectSystem=full`, and
+relative `database_path`/`md_export_dir` that would have silently discarded state on every container
+recreate. Nhan's Jira webhook also pointed at the raw IP (TLS could never validate) and filtered on
+`project in (MAIN, REV)` instead of `AMS, UDR`; both fixed.
 
-Every functional requirement has now run live end-to-end. What remains is deployment, not features.
+### ▶ The ONE remaining setup step (blocks everything below)
 
-1. **Webhook-driven form (S6.4 full) — the one substantive gap.** The whole flow has only ever been
-   driven by `scripts/run_local_demo.py`, which stands in for the webhook layer. The real trigger
-   path (`app/webhooks/`) is covered by the offline suite but has **never run against live Atlassian
-   deliveries**. Deploy to the Droplet (`deploy/README.md`) and register the webhooks (SETUP-GUIDE
-   Part 7) so a real page-create starts a run. Needs BLOCKERS B-4 (Droplet + Spaces) and B-5
-   (registry/CI to build the image off-box, AD-21).
-2. **A second clean run** once webhooks are live — the current run's artifacts carry demo history
-   (2 feedback rounds, one errored publish). A fresh PRD through the deployed path is the honest
-   S6.4 evidence. `--cleanup` removes the demo page.
-3. **Optional:** upgrade Confluence to Standard and set `require_edit_restriction: true` to exercise
-   FR-15 step 1 for real (D-21 / B-7). It is the only requirement never executed live.
+**Confluence Automation rules are not configured.** Verified: `GET /wiki/rest/webhooks/1.0/webhook`
+returns `[]`, and the Droplet's `prd_state` table has **0 rows** — no PRD has ever been processed
+there. Confluence Cloud has no admin webhook screen and no API the agent can drive for this, so it is
+Nhan's UI work: **Space settings → Automation → Create rule**, trigger *Page created*, action *Send
+web request* → `https://poetroastery.com/webhooks/atlassian`, POST, header `X-Webhook-Secret` =
+`WEBHOOK_SHARED_SECRET`. **Repeat for *Page updated*** (that one carries EH-04's rename re-entry).
 
-> **Reminder for local runs:** nothing happens the moment you comment or transition — no endpoint is
-> deployed, so nothing is listening. `--resume` polls Jira for both signals; `--admin-resume`
-> recovers an errored run.
+Until both rules exist, creating a `final_PRD_*` page does nothing. The Jira half is already live and
+proven, so the two human gates will work the moment a run exists.
 
-Open decision for the user: `config/registry.yaml` holds their real account/folder IDs and is
-currently **untracked**. SETUP-GUIDE says it is committable (no secrets), but for a shared/template
-repo it is cleaner to gitignore it. Decide before pushing anywhere.
+### Then: the S6.4 closing run
+
+Create a `final_PRD_<name>` page in the source folder (65871) and let it run untouched — no local
+driver. Walk the two gates in the UI. That is the PRD §12 Definition of Done, and the first time the
+system runs with no human standing in for the webhook layer.
+
+### Known gaps, deliberate
+
+1. **AD-23 off-box backup is NOT running** (litestream skipped by Nhan's call). The Droplet's SQLite
+   is single-copy: losing the disk loses in-flight runs. `deploy/litestream.yml` is ready if wanted.
+2. **FR-15 step 1 has never executed anywhere** — Confluence Free has no page restrictions (B-7,
+   D-21). `require_edit_restriction: false`. The published page is editable by anyone with space
+   access.
+3. **The Droplet and the Mac have separate state.** `data/state.db` locally holds the completed demo
+   run; the Droplet's `/data/state.db` is empty. They never sync.
+4. **Droplet config diverges from the repo copy on purpose:** `/opt/agent/config/registry.yaml` uses
+   absolute `/data/...` paths. Re-copying the local file would break persistence — re-apply the
+   substitution (see D-25).
 
 ## Environment notes
 
 - **Python 3.12.12** installed via pyenv and pinned in `.python-version`; venv at `.venv/`.
   Run tests with `.venv/bin/python -m pytest`.
-- **Docker:** not installed on this machine (BLOCKERS B-6). Not needed until Epic 6.
-- **Git:** initialised, work committed locally. Nothing has been pushed to a remote — S6.4 will need
-  a remote + CI to build the image off-box.
-- **Secrets:** setup is **done** — `.env` and `config/registry.yaml` exist and `verify_setup.py` is
-  fully green. Both are gitignored/untracked; never commit them (AD-4). Remaining gates (Droplet,
-  registry/CI, Docker) are tracked in [BLOCKERS.md](BLOCKERS.md) → OPEN.
+- **Docker:** still not installed on this Mac, and not needed — GitHub Actions builds the image
+  off-box (AD-21) and the Droplet only pulls.
+- **Git:** remote is `github.com/Nhansgithub/Agent_A` (public), branch `master`, CI green. Tags
+  `v*` trigger the image build.
+- **Droplet:** `root@143.198.218.143`, key-only SSH. The Mac's key is passphrase-protected — run
+  `ssh-add --apple-use-keychain ~/.ssh/id_ed25519` once per boot if SSH starts refusing.
+- **Secrets:** `.env` and `config/registry.yaml` are both **gitignored** (D-24) and also live on the
+  Droplet at `/opt/agent/.env` (mode 600) and `/opt/agent/config/registry.yaml`. Never commit them
+  (AD-4).
 
 ---
 
