@@ -320,3 +320,48 @@ def _mentions(node) -> list[str]:
 
     walk(node)
     return found
+
+
+# -- stray raw HTML from the Author (the SKILL.md forbids it; the converter degrades gracefully) --
+
+
+def test_a_line_of_only_layout_markup_is_dropped_rather_than_shown_as_text() -> None:
+    """A two-column layout request must not render as visible `&lt;td&gt;` on the page.
+
+    The Author's SKILL.md forbids raw HTML, but a slip previously escaped straight through and the
+    reader saw the literal tags. Such a line has no prose, so dropping it is lossless.
+    """
+    storage = markdown_to_storage(
+        '# Guide\n\n<table> <tr> <td width="50%" valign="top">\n\n'
+        "## Capture a note\n\nPress the shortcut.\n\n</td> </tr> </table>\n"
+    )
+
+    assert "&lt;table&gt;" not in storage
+    assert "&lt;td&gt;" not in storage
+    assert "<table>" not in storage  # and it certainly must not become real markup
+    assert "<h1>Guide</h1>" in storage
+    assert "<h2>Capture a note</h2>" in storage
+    assert "Press the shortcut." in storage
+
+
+def test_prose_on_either_side_of_stray_markup_stays_in_separate_paragraphs() -> None:
+    storage = markdown_to_storage("Before the break.\n<div>\nAfter the break.\n")
+
+    assert "<p>Before the break.</p>" in storage
+    assert "<p>After the break.</p>" in storage
+
+
+def test_a_line_mixing_tags_with_words_is_still_escaped() -> None:
+    """Only pure-markup lines are dropped — never a line carrying the user's words."""
+    storage = markdown_to_storage("The tag <b>bold</b> is discussed here.")
+
+    assert "&lt;b&gt;" in storage
+    assert "is discussed here." in storage
+
+
+def test_html_inside_a_fenced_code_block_survives() -> None:
+    """A code sample showing HTML is legitimate content, not stray layout markup."""
+    storage = markdown_to_storage("```html\n<table>\n</table>\n```")
+
+    assert "<table>" in storage  # inside CDATA, exactly as written
+    assert 'ac:name="code"' in storage

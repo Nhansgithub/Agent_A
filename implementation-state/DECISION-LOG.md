@@ -218,3 +218,149 @@ the SKILL.md rubric and the typed-decision contract, not a sampling knob — whi
 these models. Sending the parameter is a hard 400, so this is required, not optional.
 **Found by:** the live classifier eval — offline fakes accepted `temperature`, so only the real API
 surfaced it. Reinforces running the live smoke early.
+
+### D-16 · The agent's own Jira comments are suppressed by an AD-9 claim, not an author check  (2026-07-24, live)
+**Context:** Jira echoes every comment back as a `comment-created` webhook — including the agent's
+own. `_dispatch_comment` had no guard, so the clarification question the agent posts at
+`awaiting_clarification` would return as an event and be interpreted as the PM's reply: the agent
+answering its own question, which AD-16 explicitly forbids ("must never fabricate the answer"). The
+FR-07 review-request comment had the same problem at `awaiting_review`.
+**Decision:** `RunContext.post_comment` records the new comment's id in `processed_events` at post
+time (`<tenant>:jira.comment_created:<comment_id>`). The echo then collides on the AD-9 UNIQUE
+constraint and the ingress drops it as a duplicate. `handlers_authoring` was switched from
+`ticket_manager.comment` to `context.post_comment`; `ErrorHandler` takes an `on_comment` hook for the
+same claim (its escalation comment quotes the literal `@agent resume`, which `is_resume_request`
+would otherwise match).
+**Rationale:** reuses the existing idempotency mechanism rather than inventing a second guard, and it
+is *exact* — it identifies the specific comment the agent wrote.
+**Alternatives rejected:** comparing `author_account_id` to the agent account (AD-10's shape for
+Confluence). It fails whenever the agent's token and a human reviewer share one Atlassian account —
+it would make the agent deaf to that human's real feedback, a worse failure than the one it fixes.
+Kept as the router's existing admin-account check only, where a mismatch is harmless.
+**Found by:** the live review-loop run; verified in the tenant (the change-summary comment came back
+already marked seen).
+
+### D-17 · The Author emits a fixed Markdown subset; stray raw HTML is dropped, not escaped  (2026-07-24, live)
+**Context:** Asked for "2 column format", the Author emitted raw `<table>/<td width="50%">` HTML.
+`markdown_to_storage` escapes anything outside its subset (an injection guard, deliberately), so the
+page rendered the literal `&lt;table&gt;` markup as visible text. The SKILL.md said "Write in
+Markdown" but never enumerated the supported subset or forbade raw HTML.
+**Decision:** two layers. (1) The Author's SKILL.md now lists the exact round-trip-safe subset,
+forbids raw HTML outright, and requires that feedback it cannot express in Markdown be **applied as
+far as possible and the shortfall stated in the change summary** — never faked, never silently
+skipped. (2) `markdown_to_storage` drops a line consisting *solely* of HTML tags, degrading to clean
+single-column Markdown; lines mixing tags with prose are still escaped so the words survive and the
+slip stays visible.
+**Rationale:** Markdown is the deliverable (FR-15 exports `.md`), so the subset is a real contract,
+not a style preference. A tag-only line carries no prose — dropping it is lossless — while a
+tag-stripper over all content risked mangling legitimate text.
+**Alternatives rejected:** teaching the converter real HTML tables (Markdown still cannot express a
+multi-column *layout*, and it would weaken the escaping guard); silently ignoring un-expressible
+feedback (the PM must learn from the summary that it was not applied).
+**Found by:** the live FR-09 feedback round on UDR-1.
+
+### D-18 · The local driver polls comments; newest unseen wins  (2026-07-24, live)
+**Context:** With no deployed webhook endpoint there is no listener, so a PM's Jira feedback sat
+unread and no Claude call ever fired. `--resume` only polled the gate ticket for a Done transition.
+**Decision:** `--resume` now reads the ticket's comments back and feeds the **newest unseen** one to
+`apply_pm_comment`, marking older unseen ones as history; a `--baseline` flag claims everything
+currently present. Feedback is processed before the gate check, the order a webhook would have
+delivered them in.
+**Rationale:** polling is the AD-22 reconciler's own mechanism, so this is not a shortcut around a
+gate — a human still acts, and AD-15 still holds (the driver never transitions a ticket). Newest-wins
+because a poll sees a whole backlog at once and the latest word supersedes; it also stops comments
+written before D-16's claim existed from replaying as fresh feedback.
+
+### D-19 · A 403 on `set_edit_restriction` names the plan tier, not the permissions  (2026-07-24, live)
+**Context:** The publish transaction failed with `PermissionException: Not enough permissions to
+alter ContentRestrictions`. The generic 403 fix text says "grant the account access to the space" —
+but the account already held `restrict_content:space` and `administer:space`, and the content
+permission check returned `hasPermission: true`. The real cause was `"edition": "free"`: Confluence
+Cloud Free does not include page restrictions and reports the gap as a permission error.
+**Decision:** added a narrow `(status, operation) → fix` override table in `app/adapters/http.py`;
+the `(403, "set_edit_restriction")` entry tells the admin to check the site's **plan** before its
+permissions and names the `systemInfo` probe that settles it. Generic 403s are unchanged.
+**Rationale:** NFR-08 requires an error an admin can act on from a Jira comment. The generic advice
+was worse than none here — it sends them hunting for an already-granted permission. Kept the table
+narrow so it does not become a dumping ground for per-call messages.
+**Alternatives rejected:** rewriting the generic 403 text (would lose the common, correct advice);
+detecting the edition at startup (an extra call per boot to pre-empt one rare failure, and the
+edition can change under a running deployment).
+
+### D-20 · The local driver exposes `apply_admin_resume`  (2026-07-24, live)
+**Context:** Once a run enters `error` it is deliberately inert — it must never restart on the next
+unrelated event (EH-02). The only way out is `@agent resume`, which is routed by the webhook layer.
+With no endpoint deployed, the B-7 failure left the demo with no path forward at all.
+**Decision:** added `--admin-resume` to `scripts/run_local_demo.py`, calling
+`orchestrator.apply_admin_resume` directly.
+**Rationale:** it is the same call the webhook makes, not a bypass — it re-enters only at
+`last_good_checkpoint`, and AD-18's ordered idempotent publish adopts completed steps rather than
+repeating them. Without it the driver could drive every path *except* recovery, which is the one the
+live run actually needed.
+
+### D-21 · `require_edit_restriction` — a per-tenant opt-out from FR-15 step 1  (2026-07-24, Nhan's call)
+**Context:** B-7 — the live Atlassian site is Confluence Cloud **Free**, which has no page
+restrictions and rejects the call with a 403 regardless of permissions. FR-15 step 1 / AD-18 mandate
+the restriction, so the publish transaction could never complete on that site. Options put to Nhan:
+upgrade to Standard, add an opt-out flag, or leave the run parked.
+**Decision (Nhan, explicitly):** add `require_edit_restriction: bool = True` to `TenantConfig`. Set
+to false, the publisher skips step 1 and still moves + exports. Set false for `project_alpha`.
+**This knowingly relaxes a binding requirement** — recorded here because it is a spec deviation, not
+an implementation detail, and it is reversible by flipping the flag after a plan upgrade.
+**Guardrails, so the relaxation cannot become a silent lie:**
+- The default is `True`. Only an explicit per-tenant opt-out changes behaviour; every other tenant
+  and every test keeps the spec'd path.
+- A skip **never** records `restriction_applied_at`. A checkpoint claiming a restriction that was not
+  applied would make a later resume — and any admin reading the state — believe the page is
+  protected when it is editable.
+- The agent posts a comment on the Publishing ticket @-mentioning the Head of Product saying the page
+  is **not** edit-restricted. They approved expecting publishing to lock the page; a silent skip
+  would leave them trusting protection that does not exist. The `--admin-resume` banner is likewise
+  conditional.
+**Alternatives rejected:** auto-detecting the Free edition and skipping without being told (turns a
+spec deviation into invisible behaviour, and the edition can change under a running deployment);
+treating the 403 as success (loses the distinction between protected and unprotected entirely).
+
+### D-22 · `md_export_dir` points into the repo for the local demo  (2026-07-24, live)
+**Context:** the registry carried `/data/userdocs/alpha`, the *container* path from `deploy/`. On
+macOS `/data` is a read-only filesystem, so FR-15 step 3 would have failed immediately after the
+restriction — the next domino.
+**Decision:** the live registry now uses the relative `data/userdocs/alpha` for local runs, with a
+comment to restore the absolute container path when deploying to the Droplet.
+**Rationale:** config, not code — exactly what AD-4's registry is for. Caught by reading the path
+before running rather than by a second failed publish.
+
+### D-23 · Deploy-asset fixes found by reading them before running them  (2026-07-24)
+**Context:** `deploy/` and `.github/workflows/build-image.yml` were written in Epic 6 and had **never
+been executed** — no Droplet, no Docker locally, no git remote. Reviewing them before the first
+deploy surfaced four defects, each of which would have failed *after* the box was live.
+**Decisions:**
+1. **Added `.dockerignore`.** There was none, so the build context carried `.env` (Atlassian + Claude
+   credentials) and the live `data/state.db`. Also excludes `config/registry.yaml`, keeping the image
+   **tenant-generic** — the real config is mounted read-only at run time, so one artifact serves every
+   tenant and a pushed image publishes nobody's ids.
+2. **`provision.sh` now installs Docker and Caddy.** It configured swap, firewall and `/data` but
+   installed neither runtime; a stock Ubuntu Droplet would have failed at `docker pull`. Caddy in
+   particular is **not** in the Ubuntu repos — the README's `apt-get install -y caddy` could never
+   have worked, so provisioning adds the official Cloudsmith repo first.
+3. **Fixed the reconcile cron's token.** It used `${ADMIN_API_TOKEN}`, but cron runs with a near-empty
+   environment: the variable expanded to nothing and **every AD-22 sweep would have 401'd silently**.
+   Now read from `/opt/agent/.env` at run time with `grep|cut` (not `source`, so a value containing
+   shell metacharacters cannot execute), keeping the secret out of the world-readable crontab.
+   Verified against a stub `curl` with a token containing quotes, `r`s and a CRLF ending.
+4. **`/health` now reports config state** (`{"status","config","webhooks"}`). A container started
+   without its config volume is *alive but deaf* — it answered a bare `{"status":"ok"}`, would have
+   passed the deploy smoke test, and then dropped every Atlassian delivery with one log line as the
+   only evidence.
+**Rationale:** these are exactly the failures that are cheap on a laptop and expensive at 2am on a
+box you just paid for. Reading an unexercised runbook is part of deploying it.
+
+### D-24 · `config/registry.yaml` is gitignored  (2026-07-24, Nhan's call)
+**Context:** the off-box build (AD-21) requires the repo on GitHub, and the file holds one tenant's
+Jira project keys, Confluence folder ids and account ids. No secrets — credentials are env refs —
+but it identifies a specific Atlassian site.
+**Decision (Nhan):** gitignore it. The repo ships `registry.example.yaml`; the real file is scp'd to
+`/opt/agent/config` on the Droplet and mounted read-only.
+**Rationale:** the tree stays tenant-free (the spirit of AD-4/NFR-05), the repo can be made public
+later without rewriting history, and it mirrors how `.env` is already handled. Verified after the
+change: a scan of every committable file found no tenant literal and no secret-shaped string.

@@ -517,3 +517,92 @@ complete). Drive with `scripts/run_local_demo.py --resume` after each. The webho
 this needs the Droplet deploy (B-4/B-5).
 
 **Decisions recorded:** D-15 (no temperature — models reject it).
+
+---
+
+## Session 2 — 2026-07-24 · Live review loop (FR-09) + three defects fixed
+
+**Trigger:** Nhan reported "I tried to reply with a feedback in Jira ticket but nothing runs, in the
+Anthropic Console log also doesn't appear any Claude API calls."
+
+**Diagnosis — not a bug, two gaps.** (a) No webhook endpoint is deployed, so a Jira comment reaches
+nothing; the flow only runs when the local driver invokes it. (b) `run_local_demo.py --resume` only
+polled the gate ticket for a Done transition — it never read comments, so even re-running did not
+reach `apply_pm_comment`. The FR-09 loop was unreachable locally.
+
+**Fixed (D-18):** `--resume` now reads the Review ticket's comments back and feeds the newest unseen
+one to `apply_pm_comment`, before the gate check. Added `JiraAdapter.get_comments` (+ `JiraComment`)
+and a `--baseline` escape hatch.
+
+**Found while fixing — two real defects beyond the driver:**
+
+1. **Comment self-ingestion (D-16).** Jira echoes the agent's own comments back as webhooks, and
+   `_dispatch_comment` had no guard: the clarification question the agent posts would have returned
+   as "the PM's reply" and been answered by the agent itself — an AD-16 violation. Fixed by claiming
+   each posted comment's id in `processed_events` (AD-9) at post time, so the echo dedupes. Verified
+   live: the round-1 change summary came back already marked seen.
+2. **Author emitted raw HTML (D-17).** Asked for a two-column layout, it produced `<table>/<td>`,
+   which the converter escaped into visible `&lt;table&gt;` text on the page. The SKILL.md never
+   named the supported Markdown subset. Fixed in the prompt (subset + "state what you couldn't do"
+   rule) and defensively in `markdown_to_storage` (drop tag-only lines).
+
+Also fixed `adf.extract_text` dropping `hardBreak` nodes, which ran the PM's `Section:` / `Issue:` /
+`Suggested change:` lines together into one string.
+
+**Live result:** review round 1 completed end-to-end — feedback interpreted → APPLY_FEEDBACK →
+draft revised (both points applied) → change summary posted → review re-requested. Run is parked at
+`awaiting_review`, `review_round` = 1.
+
+**Tests:** 451 → 462 passing. New: `tests/test_comment_self_ingestion.py` (4), `get_comments` +
+hardBreak in `test_jira_adapter.py` (3), stray-HTML handling in `test_author_and_publish.py` (4).
+
+**Not done / handed back:** the two human gates (AD-15 — only Nhan can move UDR-1 and the Publishing
+ticket), and the round-1 formatting blemish on page 1540119, which needs a fresh human comment to
+trigger a redraft (AD-16 forbids the agent self-spinning the loop).
+
+---
+
+## Session 2 (cont.) — 2026-07-24 · Publish gate failure → end-to-end COMPLETE
+
+**Trigger:** Nhan reported the publish transaction failing when the Head of Product moved AMS-12 to
+Done: `stage failed: stage=publishing operation=confluence.set_edit_restriction`.
+
+**Diagnosis.** `403 PermissionException: Not enough permissions to alter ContentRestrictions`. Probed
+the live tenant read-only and ruled out the obvious cause: the agent account **already** held
+`restrict_content:space` and `administer:space`, and the content permission check returned
+`hasPermission: true`. The real cause was the plan tier — `settings/systemInfo` returns
+**`"edition": "free"`**, and page restrictions are not part of Confluence Cloud Free, which reports
+the gap as a permission error. Recorded as B-7.
+
+**Put to Nhan as a decision** (paid upgrade vs. relaxing a spec'd requirement vs. stopping) rather
+than resolved unilaterally. **Nhan chose the config flag.**
+
+**Implemented (D-21):** `TenantConfig.require_edit_restriction`, defaulting to **True** so the spec'd
+path stays the default. Guardrails so the relaxation can't become a silent lie: a skip never records
+`restriction_applied_at`; the agent posts an @-mention notice on the Publishing ticket telling the
+Head of Product the page is *not* edit-restricted; the CLI banner is conditional.
+
+**Two more defects fixed on the way:**
+- **D-19** — the generic 403 advice ("grant the account access") was actively misleading here. Added a
+  narrow `(status, operation)` override so a restriction 403 names the plan tier and the `systemInfo`
+  probe first.
+- **D-20** — an errored run was unrecoverable locally: `@agent resume` only existed on the webhook
+  path, so B-7 left the demo with no way forward. Added `--admin-resume`.
+- **D-22** — `md_export_dir` was the container path `/data/userdocs/alpha`; `/data` is a read-only
+  filesystem on macOS, so FR-15 step 3 was the next domino. Caught by reading the path before
+  re-running, not by a second failure.
+
+**Live result — the demo is COMPLETE.** `--admin-resume` re-entered at `publishing` and finished.
+Verified independently: page 1540119 now has `parent = 1441796` (published folder); the export exists
+at `data/userdocs/alpha/1441969-final-prd-quick-notes.md` (2038 bytes, and grep-clean of the earlier
+stray `<table>` markup); the "not edit-restricted" notice is on AMS-12 tagging the Head of Product.
+Full path: detect → classify → AMS-11 → draft → UDR-1 → 2 feedback rounds → PASS → AMS-12 →
+approval → move + export → `complete`.
+
+**Tests:** 462 → 469. New: publisher opt-out + "never checkpoint a skipped restriction" + the
+Head-of-Product notice (`test_publishing.py`), and the 403 message overrides (`test_operations.py`).
+
+**Honest status:** every FR has now run live **except** FR-15 step 1 (never executed — no plan
+supports it) and the **webhook ingress layer**, which has only ever run offline. The entire live demo
+was driven by `scripts/run_local_demo.py` standing in for webhooks. S6.4 is not fully closed until
+the service is deployed and a real Atlassian delivery starts a run (B-4/B-5).

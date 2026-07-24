@@ -3,6 +3,12 @@
 .env.*
 !.env.example
 
+# One tenant's real config: Jira project keys, Confluence folder ids, account ids. No secrets in it
+# (credentials are env references), but it identifies a specific Atlassian site, and the repo is
+# built off-box by GitHub Actions. Keep the tree tenant-free: the repo ships registry.example.yaml,
+# and the real file is scp'd to the Droplet and mounted read-only (deploy/README.md step 3).
+config/registry.yaml
+
 # Runtime state — the single durable store (AD-2/AD-11) and the Markdown exports (FR-15).
 # These are backed up off-box by litestream (AD-23), never by git.
 *.db

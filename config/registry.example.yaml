@@ -86,6 +86,14 @@ tenants:
     # --- infra ------------------------------------------------------------------------------------
     md_export_dir: "/data/userdocs/alpha"   # FR-15 step 3 — where the final .md is written
 
+    # FR-15 step 1 / AD-18 — edit-restrict the page when publishing. Defaults to true; leave it out
+    # unless you must opt out. Set it to false ONLY on a Confluence Cloud **Free** site, which has no
+    # page restrictions and rejects the call with a 403 no matter the account's permissions. When
+    # false the doc is still moved and exported, and the agent posts a notice on the Publishing ticket
+    # saying the page stayed editable. Check your edition:
+    #   GET /wiki/rest/api/settings/systemInfo  ->  "edition": "free" | "standard" | ...
+    # require_edit_restriction: false
+
     # --- observability (AD-20) --------------------------------------------------------------------
     # false = metadata-only traces (latency/tokens/cost, no document body). The demo traces
     # non-confidential test PRDs only; full redaction/retention is a post-demo item.

@@ -44,8 +44,20 @@ def create_app(registry_path: Path | None = None) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
-        """Liveness probe (Story 6.4 deploy smoke test). Works with or without config."""
-        return {"status": "ok"}
+        """Liveness probe (Story 6.4 deploy smoke test). Works with or without config.
+
+        Reports `config` as well as liveness, because those are different questions and only one of
+        them is obvious from the outside. A container started without its config volume mounted is
+        *alive* but accepts no webhooks — it would answer a bare `{"status": "ok"}`, pass the deploy
+        smoke test, and then silently ignore every Atlassian delivery, leaving one log line as the
+        only evidence. Stays 200 either way: this is a liveness probe, and a restart would not fix a
+        missing mount.
+        """
+        return {
+            "status": "ok",
+            "config": "loaded" if composition is not None else "missing",
+            "webhooks": "mounted" if composition is not None else "not-mounted",
+        }
 
     if composition is None:
         logger.warning(

@@ -107,9 +107,33 @@ class PublishingHandlers:
             export_done=state.md_exported_at is not None,
             existing_md_path=state.md_export_path,
         )
+
+        # The doc is published but NOT write-protected (FR-15 step 1 opted out). Say so on the
+        # ticket: the Head of Product approved on the understanding that publishing locks the page,
+        # and a silent skip would leave them believing a protection that is not there.
+        if result.restriction_skipped and state.publishing_ticket_key:
+            await context.post_comment(
+                state.publishing_ticket_key,
+                adf.doc(
+                    adf.paragraph(
+                        adf.mention(context.tenant.head_of_product_account_id),
+                        adf.text(" the UserDoc is published, moved, and exported — but it is "),
+                        adf.strong("not edit-restricted"),
+                        adf.text(
+                            ". This site's Confluence plan does not support page restrictions, so "
+                            "the page stays editable by anyone with space access. Restrict it "
+                            "manually if that matters, or upgrade the site and re-publish."
+                        ),
+                    )
+                ),
+            )
+
         # (4) Mark complete — the orchestrator's stage advance, in the same write (AD-11).
+        note = f"published; exported to {result.md_export_path}"
+        if result.restriction_skipped:
+            note += " (edit restriction skipped — tenant opted out)"
         return Advance(
             to_stage=Stage.COMPLETE,
             recorded={"md_export_path": result.md_export_path},
-            note=f"published; exported to {result.md_export_path}",
+            note=note,
         )

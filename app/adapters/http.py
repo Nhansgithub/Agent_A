@@ -28,6 +28,23 @@ from app.domain.errors import AgentError
 #: Transient upstream conditions worth retrying (NFR-08).
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
+#: `(status, operation)` → a fix that beats the generic per-status advice. Kept narrow: an entry
+#: belongs here only when the generic message would actively mislead an admin.
+_OPERATION_FIXES: dict[tuple[int, str], str] = {
+    # Confluence Cloud **Free** does not include page restrictions. The API answers a permission
+    # error, so the generic "grant the account access" advice sends an admin hunting for a permission
+    # that is already granted — the account can hold `restrict_content` and `administer` on the space
+    # and still get this 403. Name the real cause first.
+    (403, "set_edit_restriction"): (
+        "Confluence rejected the restriction. Check the site's plan **before** its permissions: page "
+        "restrictions are not part of the Confluence Cloud Free edition, and on Free this fails with "
+        "a permission error even for a space admin. Confirm with GET /wiki/rest/api/settings/"
+        "systemInfo → `edition`. If it reads `free`, upgrade the site to Standard or above (FR-15 "
+        "step 1 / AD-18 require the restriction). If it does not, grant the agent account "
+        "'Add and delete restrictions' on the space, then reply to resume."
+    ),
+}
+
 
 class AtlassianClient:
     """An authenticated, retrying HTTP client for one Atlassian product on one tenant."""
@@ -169,7 +186,8 @@ class AtlassianClient:
         )
         return AgentError(
             message=f"{self._product.title()} rejected {operation}: {detail}",
-            suggested_fix=fixes.get(status, default_fix),
+            suggested_fix=_OPERATION_FIXES.get((status, operation))
+            or fixes.get(status, default_fix),
             operation=f"{self._product}.{operation}",
             retryable=status in RETRYABLE_STATUS,
             status_code=status,

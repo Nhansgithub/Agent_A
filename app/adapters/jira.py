@@ -18,7 +18,8 @@ from typing import Any
 
 from app.adapters.http import AtlassianClient
 from app.config.constants import prd_marker_label
-from app.domain.atlassian import JiraIssue, JiraTransition
+from app.domain import adf
+from app.domain.atlassian import JiraComment, JiraIssue, JiraTransition
 from app.domain.errors import AgentError
 
 API = "/rest/api/3"
@@ -109,6 +110,34 @@ class JiraAdapter:
                 )
             )
         return transitions
+
+    async def get_comments(self, issue_key: str, *, limit: int = 50) -> list[JiraComment]:
+        """The issue's comments, oldest first, flattened to plain text.
+
+        The webhook path never needs this — a `comment-created` event carries the body. It exists for
+        the *poll* path: the AD-22 reconciler and the local driver observe the same PM feedback by
+        reading it back, and the AD-9 dedupe key (comment id) makes a poll and a webhook that saw the
+        same comment collide, so feedback is interpreted once however it was noticed.
+        """
+        body = await self._client.request(
+            "GET",
+            f"{API}/issue/{issue_key}/comment",
+            operation="get_comments",
+            params={"maxResults": limit, "orderBy": "created"},
+            context={"issue": issue_key},
+        )
+        comments: list[JiraComment] = []
+        for item in (body or {}).get("comments", []):
+            author = item.get("author") or {}
+            comments.append(
+                JiraComment(
+                    id=str(item.get("id", "")),
+                    author_account_id=str(author.get("accountId") or ""),
+                    body_text=adf.extract_text(item.get("body")).strip(),
+                    created=str(item.get("created") or ""),
+                )
+            )
+        return comments
 
     # -- writes ------------------------------------------------------------------------------
 

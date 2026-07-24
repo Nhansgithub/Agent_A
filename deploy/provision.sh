@@ -26,9 +26,36 @@ ufw allow 443/tcp
 ufw --force enable
 echo "    ufw active; FastAPI stays bound to localhost behind Caddy"
 
+echo "==> Docker (the box only PULLS the image — it never builds one, AD-21)"
+if command -v docker >/dev/null 2>&1; then
+	echo "    docker already installed — skipping"
+else
+	# Stock Ubuntu has no docker package. Docker's official convenience script adds their apt repo.
+	curl -fsSL https://get.docker.com | sh
+	systemctl enable --now docker
+	echo "    docker installed"
+fi
+
+echo "==> Caddy (TLS terminator + reverse proxy)"
+if command -v caddy >/dev/null 2>&1; then
+	echo "    caddy already installed — skipping"
+else
+	# Caddy is NOT in the stock Ubuntu repos; `apt-get install caddy` alone fails. Add the official
+	# Cloudsmith repo first (these steps are from caddyserver.com/docs/install).
+	apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+	curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' |
+		gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+	curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+		>/etc/apt/sources.list.d/caddy-stable.list
+	apt-get update
+	apt-get install -y caddy
+	echo "    caddy installed"
+fi
+
 echo "==> Data directory for the SQLite store + exported .md files (backed up by litestream, AD-23)"
 mkdir -p /data/userdocs
-echo "    /data ready"
+mkdir -p /opt/agent/config
+echo "    /data and /opt/agent ready"
 
 echo "==> Reminder"
 cat <<'NOTE'

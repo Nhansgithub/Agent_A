@@ -78,6 +78,21 @@ class TenantConfig(BaseModel):
     md_export_dir: str = NonEmptyStr
     """FR-15 step 3: where the final UserDoc `.md` is written on server disk."""
 
+    require_edit_restriction: bool = True
+    """FR-15 step 1 / AD-18: apply the Confluence edit restriction when publishing.
+
+    **Defaults to True — the spec'd behaviour.** Setting it False is an explicit, per-tenant
+    relaxation of a requirement, and exists for one reason: page restrictions are not part of the
+    **Confluence Cloud Free** edition, where the API rejects them with a 403 no matter what
+    permissions the agent account holds (see BLOCKERS.md → B-7). On such a site the publish
+    transaction could never complete, so the choice is between an unusable flow and a published doc
+    that is not write-protected.
+
+    When False the publisher **skips** step 1 and says so in the publish confirmation, so the humans
+    learn from the ticket that the page stayed editable. It never claims the restriction was applied:
+    `restriction_applied_at` stays unset and `PublishResult.restriction_applied` is False. Move and
+    export are unaffected. Set it back to True after upgrading the site."""
+
     # --- observability (AD-20) ------------------------------------------------------------------
     trace_content: bool = False
     """AD-20 content-gating flag. False = metadata-only traces (latency/tokens/cost, no document

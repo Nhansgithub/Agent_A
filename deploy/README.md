@@ -13,15 +13,23 @@ The operational envelope is a first-class constraint (AD-21, PRD §15). The sing
 
 ## 1. Build off the box and push
 
-On your laptop or in CI (**not** on the Droplet):
+**Recommended: let GitHub Actions do it.** `.github/workflows/build-image.yml` already builds this
+image and pushes it to GHCR, which satisfies AD-21's off-box rule without Docker on your laptop.
+Push the repo to GitHub, then either push a `v*` tag or run the workflow manually:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0     # or: Actions -> build-image -> Run workflow
+```
+
+The image lands at `ghcr.io/<owner>/<repo>:latest`. **A GHCR image is private by default**, so the
+Droplet must authenticate before it can pull — see step 3.
+
+Only if you have Docker locally and prefer to build by hand:
 
 ```bash
 docker build -f deploy/Dockerfile -t <registry>/leapxpert-agent-a:latest .
 docker push <registry>/leapxpert-agent-a:latest
 ```
-
-A GitHub Actions workflow doing exactly this is the recommended path (Story 6.4 needs the build to
-be off-box). See `.github/workflows/build-image.yml`.
 
 ## 2. Provision the Droplet (once)
 
@@ -30,7 +38,8 @@ scp deploy/provision.sh root@<droplet-ip>:/root/
 ssh root@<droplet-ip> 'bash /root/provision.sh'
 ```
 
-Adds a 2 GB swap file, opens only 443 + 22, and creates `/data`.
+Adds a 2 GB swap file, opens only 443 + 22, installs **Docker** and **Caddy**, and creates `/data`
+and `/opt/agent/config`. Idempotent — safe to re-run.
 
 ## 3. Configure and run
 
@@ -39,6 +48,11 @@ On the Droplet:
 ```bash
 mkdir -p /opt/agent && cd /opt/agent
 # copy your filled-in .env and config/ here (scp), then:
+
+# GHCR images are private by default — authenticate first, with a GitHub PAT that has read:packages.
+# (Use --password-stdin: a token on the command line lands in the shell history.)
+echo "$GITHUB_PAT" | docker login ghcr.io -u <github-username> --password-stdin
+
 docker pull <registry>/leapxpert-agent-a:latest
 docker run -d --name agent --restart unless-stopped \
     --memory 768m \
@@ -52,13 +66,33 @@ docker run -d --name agent --restart unless-stopped \
 `--memory 768m` leaves headroom under 1 GB + swap. FastAPI is bound to localhost via the port
 mapping; nothing but Caddy reaches it.
 
-## 4. Caddy (TLS + reverse proxy)
+**The `config` mount is not optional.** The image deliberately ships *without* `registry.yaml`
+(see `.dockerignore`) so one image serves every tenant. Without the mount the container starts,
+answers `/health`, and silently accepts no webhooks. Verify before going further:
 
 ```bash
-apt-get install -y caddy   # or the Marketplace image ships it
-cp deploy/Caddyfile /etc/caddy/Caddyfile   # edit the domain first
-systemctl restart caddy
+curl -s localhost:8000/health
+# {"status":"ok","config":"loaded","webhooks":"mounted"}     <- what you want
+# {"status":"ok","config":"missing","webhooks":"not-mounted"} <- config volume not mounted
 ```
+
+If it says `missing`, fix the `-v .../config:/app/config:ro` path before registering webhooks —
+otherwise every Atlassian delivery is dropped with only a log line to show for it.
+
+## 4. Caddy (TLS + reverse proxy)
+
+`provision.sh` already installed Caddy (it is **not** in the stock Ubuntu repos — a bare
+`apt-get install caddy` fails, which is why provisioning adds the official repo first).
+
+```bash
+# Set your domain in the Caddyfile BEFORE copying it — Caddy requests a certificate for whatever
+# hostname is in there, and Let's Encrypt rate-limits repeated failures for a wrong name.
+scp deploy/Caddyfile root@<droplet-ip>:/etc/caddy/Caddyfile
+ssh root@<droplet-ip> 'systemctl restart caddy && systemctl status caddy --no-pager'
+```
+
+The domain's **A record must already point at the Droplet IP** when Caddy starts: it proves
+ownership over HTTP-01, which fails if DNS has not propagated yet.
 
 Caddy auto-provisions a Let's Encrypt cert for your domain and proxies only `/webhooks/*` + `/health`.
 

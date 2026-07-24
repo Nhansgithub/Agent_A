@@ -340,3 +340,116 @@ async def test_the_full_publish_gate_to_complete_sequence() -> None:
 
     assert repository.state.require("page-1").is_complete
     assert context.publisher.published == 1
+
+
+# ---------------------------------------------------------------------------------------------
+# `require_edit_restriction: false` — the explicit opt-out for Confluence Free (B-7, D-21).
+# The default stays True everywhere; only a tenant that sets it False skips FR-15 step 1.
+# ---------------------------------------------------------------------------------------------
+
+
+def make_unrestricted_tenant(md_dir: str) -> TenantConfig:
+    return TenantConfig.model_validate(
+        {
+            **tenant_entry(md_export_dir=md_dir, require_edit_restriction=False),
+            "project_id": "tenant_one",
+        }
+    )
+
+
+def test_the_restriction_is_required_by_default() -> None:
+    """The spec'd behaviour must be what you get without saying anything (FR-15 step 1)."""
+    assert make_tenant("/tmp/x").require_edit_restriction is True
+
+
+async def test_opting_out_skips_the_restriction_but_still_moves_and_exports(tmp_path) -> None:
+    confluence = FakeConfluence()
+    markers: dict = {}
+
+    result = await Publisher(confluence).publish(
+        tenant=make_unrestricted_tenant(str(tmp_path)),
+        prd_id="page-1",
+        page_id="draft-1",
+        page_title="Widget Guide",
+        agent_account_id=AGENT_ACCOUNT,
+        on_step=lambda **kw: _collect(markers, **kw),
+    )
+
+    assert confluence.restrictions == [], "no restriction call should be made"
+    assert confluence.moves == [("draft-1", "folder-published-1")]
+    assert result.md_export_path is not None
+    assert result.restriction_skipped is True
+    assert result.restriction_applied is False
+
+
+async def test_a_skipped_restriction_is_never_checkpointed_as_applied(tmp_path) -> None:
+    """The checkpoint must not claim protection the page does not have.
+
+    If a skip recorded `restriction_applied_at`, a later resume — or an admin reading the state —
+    would believe the page is write-protected when anyone with space access can edit it.
+    """
+    markers: dict = {}
+
+    await Publisher(FakeConfluence()).publish(
+        tenant=make_unrestricted_tenant(str(tmp_path)),
+        prd_id="page-1",
+        page_id="draft-1",
+        page_title="Widget Guide",
+        agent_account_id=AGENT_ACCOUNT,
+        on_step=lambda **kw: _collect(markers, **kw),
+    )
+
+    assert "restriction_applied_at" not in markers
+    assert "moved_to_published_at" in markers
+    assert "md_exported_at" in markers
+
+
+async def test_a_skipped_restriction_is_announced_on_the_publishing_ticket() -> None:
+    """The Head of Product approved expecting publishing to lock the page — they must be told it did not.
+
+    A silent skip is the dangerous outcome: the ticket closes, the doc looks published, and everyone
+    believes it is write-protected when anyone with space access can still edit it.
+    """
+    from app.agents.publisher import PublishResult
+    from app.domain import adf
+
+    class SkippingPublisher(FakePublisher):
+        async def publish(self, **kwargs):
+            self.published += 1
+            await kwargs["on_step"](moved_to_published_at=utc_now())
+            path = f"{kwargs['tenant'].md_export_dir}/{kwargs['prd_id']}.md"
+            await kwargs["on_step"](md_exported_at=utc_now(), md_export_path=path)
+            return PublishResult(
+                md_export_path=path,
+                restriction_applied=False,
+                moved=True,
+                exported=True,
+                restriction_skipped=True,
+            )
+
+    orchestrator, repository, context = build(
+        stage=Stage.PUBLISHING, publishing_ticket_key="TESTMAIN-9"
+    )
+    context.publisher = SkippingPublisher()
+    context.tenant = make_unrestricted_tenant("/tmp/x")
+
+    await orchestrator.advance("page-1")
+
+    assert repository.state.require("page-1").stage is Stage.COMPLETE
+    notice = [c for c in context.comments if c[0] == "TESTMAIN-9"]
+    assert notice, "the Head of Product was not told the page is unrestricted"
+    text = adf.extract_text(notice[-1][1]).lower()
+    assert "not edit-restricted" in text
+    # and it must tag them, or the notice reaches nobody (adf.mention, not plain text)
+    assert "mention" in str(notice[-1][1])
+
+
+async def test_a_normal_publish_posts_no_unrestricted_notice() -> None:
+    orchestrator, repository, context = build(
+        stage=Stage.PUBLISHING, publishing_ticket_key="TESTMAIN-9"
+    )
+
+    await orchestrator.advance("page-1")
+
+    assert repository.state.require("page-1").stage is Stage.COMPLETE
+    assert [c for c in context.comments if c[0] == "TESTMAIN-9"] == []

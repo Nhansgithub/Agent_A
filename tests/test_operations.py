@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -164,3 +165,82 @@ def test_build_workflow_builds_off_the_box() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "build-image.yml").read_text()
     assert "docker/build-push-action" in workflow
     assert "deploy/Dockerfile" in workflow
+
+
+def test_a_restriction_403_names_the_plan_tier_not_the_permissions() -> None:
+    """Confluence Cloud Free has no page restrictions and reports it as a permission error.
+
+    The generic 403 advice ("grant the account access to the space") is actively misleading here: the
+    account can already hold `restrict_content` and `administer` on the space and still get this 403,
+    so an admin following that advice hunts for a permission that is already granted.
+    """
+    import httpx
+
+    from app.adapters.http import AtlassianClient
+    from app.config.secrets import AtlassianCredentials
+    from app.domain.errors import AgentError
+
+    class Transport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(403, json={"message": "Not enough permissions to alter"})
+
+    credentials = AtlassianCredentials(
+        base_url="https://example.atlassian.net", email="svc@example.com", api_token="t"
+    )
+    client = AtlassianClient(
+        credentials,
+        product="confluence",
+        max_attempts=1,
+        backoff_seconds=0,
+        client=httpx.AsyncClient(transport=Transport(), base_url=credentials.base_url),
+    )
+
+    async def run() -> AgentError:
+        try:
+            await client.request("PUT", "/x", operation="set_edit_restriction")
+        except AgentError as error:
+            return error
+        raise AssertionError("expected an AgentError")
+
+    error = asyncio.run(run())
+
+    fix = error.suggested_fix.lower()
+    assert "free" in fix and "plan" in fix
+    assert "edition" in fix  # points at the systemInfo probe that settles it
+    assert error.status_code == 403
+
+
+def test_an_unrelated_403_keeps_the_generic_permission_advice() -> None:
+    """The operation-specific override must not swallow ordinary permission failures."""
+    import httpx
+
+    from app.adapters.http import AtlassianClient
+    from app.config.secrets import AtlassianCredentials
+    from app.domain.errors import AgentError
+
+    class Transport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(403, json={"message": "nope"})
+
+    credentials = AtlassianCredentials(
+        base_url="https://example.atlassian.net", email="svc@example.com", api_token="t"
+    )
+    client = AtlassianClient(
+        credentials,
+        product="jira",
+        max_attempts=1,
+        backoff_seconds=0,
+        client=httpx.AsyncClient(transport=Transport(), base_url=credentials.base_url),
+    )
+
+    async def run() -> AgentError:
+        try:
+            await client.request("POST", "/x", operation="create_issue")
+        except AgentError as error:
+            return error
+        raise AssertionError("expected an AgentError")
+
+    error = asyncio.run(run())
+
+    assert "lacks permission" in error.suggested_fix
+    assert "free" not in error.suggested_fix.lower()

@@ -158,7 +158,25 @@ class RunContext:
         )
 
     async def post_comment(self, issue_key: str, body: dict) -> None:
-        await self.ticket_manager.comment(issue_key, body)
+        """Post an agent comment and immediately claim its id in `processed_events` (AD-9, AD-10).
+
+        Jira echoes every comment back as a `comment-created` webhook — including the agent's own.
+        Without this, the clarification question the agent just asked would return as an event, be
+        read as the PM's reply, and *fabricate the answer to its own question* — precisely what AD-16
+        forbids. Recording the id at post time makes that echo collide on the dedupe UNIQUE
+        constraint and be dropped as a duplicate, which is the AD-10 self-ingestion guard applied to
+        Jira comments rather than a second mechanism. It also keeps the AD-22 poll path honest: a
+        reconciler reading comments back skips the ones the agent wrote itself.
+        """
+        comment_id = await self.ticket_manager.comment(issue_key, body)
+        if comment_id:
+            from app.domain.dedupe import DedupeKey
+            from app.domain.events import EventType
+
+            self._repository.record_event_for(
+                DedupeKey(self.tenant.project_id, EventType.JIRA_COMMENT_CREATED, comment_id),
+                self.prd_id,
+            )
 
     async def record_publish_progress(self, **markers: object) -> None:
         """AD-18 — persist a publish sub-checkpoint. A non-`stage` write (AD-2)."""

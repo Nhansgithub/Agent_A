@@ -1,10 +1,19 @@
 # AD-22 reconcile/liveness sweep — the chosen mechanism: system cron hitting the authenticated
 # localhost admin endpoint. No always-on Python scheduler process competing for RAM (AD-21).
 #
-# Install with:  crontab -l | cat - deploy/reconcile.cron | crontab -
-# The ADMIN_API_TOKEN must match the one in the service's .env (system.admin_token_ref).
+# Install with:  crontab -l 2>/dev/null | cat - deploy/reconcile.cron | crontab -
 #
 # Every 15 minutes: alert on stale parked/error runs (once per threshold) and reconcile-poll the two
 # gate tickets, recovering any gate-Done a dropped webhook missed. This adds recoverability, NOT a
 # timeout — parked runs still park indefinitely (AD-22).
-*/15 * * * * curl -fsS -m 60 -X POST http://127.0.0.1:8000/admin/reconcile -H "X-Admin-Token: ${ADMIN_API_TOKEN}" >> /var/log/agent-reconcile.log 2>&1
+#
+# The token is read out of /opt/agent/.env at run time rather than written here, for two reasons:
+# cron runs with a near-empty environment (a bare `${ADMIN_API_TOKEN}` would expand to nothing and
+# every sweep would 401 silently), and a crontab is world-readable — the secret stays in the .env,
+# which is not. `grep|cut` rather than sourcing the file, so a value containing spaces or shell
+# metacharacters cannot be executed.
+#
+# `tr -d '\042\047\r'` strips surrounding quotes and a CRLF line ending. Octal (\042 = ", \047 = ')
+# rather than the literal characters: nesting quotes inside a single-quoted crontab command is what
+# turns a small edit into `tr -d` silently eating every letter of the token.
+*/15 * * * * T=$(grep -m1 '^ADMIN_API_TOKEN=' /opt/agent/.env | cut -d= -f2- | tr -d '\042\047\r') && curl -fsS -m 60 -X POST http://127.0.0.1:8000/admin/reconcile -H "X-Admin-Token: $T" >> /var/log/agent-reconcile.log 2>&1

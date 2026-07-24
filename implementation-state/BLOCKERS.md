@@ -13,25 +13,70 @@ Protocol): stop that thread, record it here, ask the user, and continue with eve
 > into `config/registry.yaml`, and `scripts/verify_setup.py` checks the whole configuration
 > read-only. Nhan is working through the guide in parallel with the build (confirmed 2026-07-24).
 
-## OPEN — with Nhan, being provisioned
+## RESOLVED (by decision) — B-7 · Confluence Cloud plan blocks the publish restriction
 
-Status as reported by Nhan on 2026-07-24.
+**Blocks:** FR-15 step 1 / AD-18 — the edit restriction, and therefore Epic 6's publish transaction
+and the `complete` stage. The run for PRD 1441969 is parked in `error` at `last_good_checkpoint =
+publishing` (correct EH-01/AD-19 behaviour), Publishing ticket **AMS-12**.
+
+**What happened.** The Head of Product moved AMS-12 to Done, the publish transaction started, and
+step 1 failed:
+
+```
+Not enough permissions to alter ContentRestrictions on a content with ContentId <1540119> (HTTP 403)
+```
+
+**Why it is not a permissions fix.** Verified read-only against the live tenant: the agent account
+already holds `restrict_content:space` **and** `administer:space` on space 360452, and the content
+permission check returns `hasPermission: true` for `update`. The real cause is the plan tier —
+`GET /wiki/rest/api/settings/systemInfo` returns **`"edition": "free"`**, and page restrictions are
+not part of Confluence Cloud Free. On Free the API reports the gap as a permission error, which is
+why the generic 403 advice is misleading (now overridden in `app/adapters/http.py`).
+
+**Why the agent cannot self-serve it.** It is a paid plan upgrade on Nhan's Atlassian site — money
+and account ownership. No permission grant, token change, or code change can enable the feature.
+
+**Nhan's options (this is a decision, not just a task):**
+
+1. **Upgrade the Confluence site to Standard** (Standard has a free trial). Then:
+   `.venv/bin/python scripts/run_local_demo.py --admin-resume` — AD-18's ordered idempotent publish
+   re-enters at `publishing` and completes restriction → move → export. This is the only path that
+   demonstrates FR-15 as specified.
+2. **Make the restriction optional per tenant** — a config flag so a Free-edition site skips step 1
+   and still completes move + export. This *knowingly relaxes* FR-15 step 1 / AD-18, so it needs
+   Nhan's explicit call; the agent must not decide to drop a spec'd requirement on its own.
+3. **Leave the run parked** and treat the restriction as demonstrated-by-test only (the publish
+   transaction is fully covered offline in `tests/test_publishing.py`).
+
+**RESOLVED 2026-07-24 — Nhan chose option 2** (the config flag). `require_edit_restriction: false`
+is set for `project_alpha`; the run completed via `--admin-resume` (move + export, no restriction),
+and the agent posted the "not edit-restricted" notice on AMS-12. Recorded as **D-21** — this is a
+knowing relaxation of FR-15 step 1 / AD-18, reversible by flipping the flag after a plan upgrade.
+**The published page is editable by anyone with space access.**
+
+---
+
+## OPEN — remaining gates (deployment only)
+
+Setup was completed by Nhan on 2026-07-24 and `scripts/verify_setup.py` reports **17 passed, 0
+failed**. Everything needed to *run* the flow is in place; what is left is deployment.
 
 | Gate | Status | Still needed |
 |---|---|---|
-| **Atlassian account, projects, folders** | ✅ Done | — Jira Main + Review projects and a Confluence space with source / draft / published folders already exist. |
-| **Atlassian API token** | ⏳ Not started | SETUP-GUIDE Part 1. Nhan had not created one and did not know how — hence the guide. |
-| **Atlassian IDs** (project keys, folder ids, account ids) | ⏳ Not collected | SETUP-GUIDE Part 2 — `scripts/discover_ids.py` prints them all. |
-| **Anthropic API key** | ✅ Have it | Just needs pasting into `.env` (SETUP-GUIDE Part 3). |
-| **Webhook shared secret** | ⏳ Not started | Self-generated, not fetched — `openssl rand -hex 32` (SETUP-GUIDE Part 4). Nhan was unsure what this was. |
-| **LangSmith account + key** | ⏳ Not started | Free tier confirmed sufficient (SETUP-GUIDE Part 5). |
-| **DigitalOcean Droplet + Spaces** (litestream) | ⏳ Not started | Only needed for Epic 6 (SETUP-GUIDE Part 8). |
+| **Atlassian account, projects, folders** | ✅ Done | Jira AMS (main) + UDR (review); Confluence folders 65871 / 1474562 / 1441796. |
+| **Atlassian API token** | ✅ Done | In `.env`, verified live. |
+| **Atlassian IDs** | ✅ Done | In `config/registry.yaml`, all verified by `verify_setup.py`. |
+| **Anthropic API key** | ✅ Done | Verified live (classifier eval + drafting + revise loop all ran). |
+| **Webhook shared secret** | ✅ Done | Set. Not yet *exercised* — no endpoint is deployed to receive a signed delivery. |
+| **LangSmith account + key** | ✅ Done | Key accepted by the API. |
+| **DigitalOcean Droplet + Spaces** (B-4) | ⏳ Not started | The real blocker now — without it the webhook path (S6.4 full) cannot run live. SETUP-GUIDE Part 8. |
+| **Container registry / CI** (B-5) | ⏳ Not started | Needed to build the image off-box (AD-21: the 1 GB Droplet must not build). |
 
 **Naming note:** Nhan referred to the second Jira project as *"Preview"*; the PRD and this codebase
 call it the **Review** project. Same thing — only its project *key* matters in config.
 
-**Nhan will send a message when setup is complete.** Until then: keep building against fakes, mark
-anything needing live verification as `PARTIAL`, and do not block on these.
+Everything except B-4/B-5 is unblocked and has run live. The webhook ingress layer remains the one
+component verified **only** offline — see STATE.md → Next Action.
 
 ---
 

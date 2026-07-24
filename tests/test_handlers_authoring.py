@@ -94,6 +94,12 @@ class FakeContext:
     async def confluence_space_id(self) -> str:
         return "space-1"
 
+    async def post_comment(self, issue_key: str, body: dict) -> None:
+        # The real context also claims the returned comment id in `processed_events` so Jira's echo
+        # of the agent's own comment is not read back as PM feedback; that is covered in
+        # tests/test_orchestrator_context.py. Here it just needs to reach the ticket manager.
+        await self.ticket_manager.comment(issue_key, body)
+
 
 def build(*, stage: Stage = Stage.DRAFTED, **state_kwargs):
     repository = Repository(Database(":memory:"))

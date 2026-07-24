@@ -356,3 +356,80 @@ async def test_error_message_includes_the_upstream_detail() -> None:
 
     with pytest.raises(AgentError, match="summary: is required"):
         await adapter.get_issue("MAIN-1")
+
+
+# -- get_comments: the poll-path read behind FR-09 feedback ------------------------------------
+
+
+async def test_get_comments_flattens_adf_bodies_to_plain_text() -> None:
+    """The Feedback interpreter must read what the PM wrote, not a JSON tree."""
+    adapter, transport = build(
+        json_response(
+            200,
+            {
+                "comments": [
+                    {
+                        "id": "10001",
+                        "author": {"accountId": "acct-pm"},
+                        "created": "2026-07-24T10:00:00.000+0000",
+                        "body": adf.doc(
+                            adf.paragraph(adf.text("Section: Setup")),
+                            adf.paragraph(adf.text("Issue: too terse")),
+                        ),
+                    }
+                ]
+            },
+        )
+    )
+
+    comments = await adapter.get_comments("UDR-1")
+
+    assert [c.id for c in comments] == ["10001"]
+    assert comments[0].author_account_id == "acct-pm"
+    assert "Section: Setup" in comments[0].body_text
+    assert "Issue: too terse" in comments[0].body_text
+    assert transport.requests[0].url.path == "/rest/api/3/issue/UDR-1/comment"
+
+
+async def test_get_comments_returns_empty_for_an_issue_with_no_comments() -> None:
+    adapter, _ = build(json_response(200, {"comments": []}))
+
+    assert await adapter.get_comments("UDR-1") == []
+
+
+async def test_get_comments_keeps_soft_line_breaks_that_carry_the_feedback_format() -> None:
+    """A PM typing the §6.2 format with Shift+Enter produces one paragraph of `hardBreak` nodes.
+
+    Dropping them concatenates the labels ("What Quick Notes doesIssue: ...") and hides the
+    structure the Feedback interpreter keys on, so the breaks must survive the flattening.
+    """
+    paragraph_with_breaks = {
+        "type": "paragraph",
+        "content": [
+            {"type": "text", "text": "Section: What Quick Notes does"},
+            {"type": "hardBreak"},
+            {"type": "text", "text": "Issue: too much detail"},
+            {"type": "hardBreak"},
+            {"type": "text", "text": "Suggested change: trim it"},
+        ],
+    }
+    adapter, _ = build(
+        json_response(
+            200,
+            {
+                "comments": [
+                    {
+                        "id": "10001",
+                        "author": {"accountId": "acct-pm"},
+                        "body": {"version": 1, "type": "doc", "content": [paragraph_with_breaks]},
+                    }
+                ]
+            },
+        )
+    )
+
+    body_text = (await adapter.get_comments("UDR-1"))[0].body_text
+
+    assert "Section: What Quick Notes does" in body_text
+    assert "doesIssue" not in body_text
+    assert body_text.splitlines()[1].startswith("Issue:")

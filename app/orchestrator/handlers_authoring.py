@@ -51,6 +51,7 @@ class Epic3Context(Protocol):
     async def page_markdown(self) -> str: ...
     def draft_page_url(self, page_id: str) -> str: ...
     async def confluence_space_id(self) -> str: ...
+    async def post_comment(self, issue_key: str, body: dict) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,8 +91,11 @@ class AuthoringHandlers:
             )
             review_ticket_key = ticket.key
 
-        # 4. FR-07 — the framed review-request comment.
-        await context.ticket_manager.comment(
+        # 4. FR-07 — the framed review-request comment. Posted via the context (not the ticket
+        #    manager directly) so its id is claimed in `processed_events` — otherwise Jira's echo of
+        #    this very comment arrives as a `comment-created` event on the ticket the run is now
+        #    parked against, and gets read as the PM's feedback.
+        await context.post_comment(
             review_ticket_key,
             build_review_request(
                 pm_account_id=context.tenant.pm_account_id, draft_page_url=page_url

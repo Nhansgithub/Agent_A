@@ -77,10 +77,21 @@ def build_error_comment(*, admin_account_id: str, error: AgentError, correlation
 class ErrorHandler:
     """Posts the EH-01 escalation comment for an errored run."""
 
-    __slots__ = ("_ticket_manager",)
+    __slots__ = ("_on_comment", "_ticket_manager")
 
-    def __init__(self, ticket_manager: TicketManager) -> None:
+    def __init__(self, ticket_manager: TicketManager, *, on_comment=None) -> None:
+        """
+        Args:
+            ticket_manager: the Jira write path.
+            on_comment: optional `(comment_id) -> None` hook used to claim the posted comment's id
+                in `processed_events`. The escalation comment quotes the literal `@agent resume`
+                instruction, so Jira's echo of it is a comment event that `is_resume_request` would
+                match — claiming the id makes that echo a dedupe duplicate instead of a run
+                resuming itself. The author check in the router covers the same ground whenever the
+                agent and admin are separate accounts; this covers it when they are not.
+        """
         self._ticket_manager = ticket_manager
+        self._on_comment = on_comment
 
     async def surface(
         self, *, state: PrdState, error: AgentError, tenant: TenantConfig
@@ -95,7 +106,7 @@ class ErrorHandler:
             # No ticket exists yet (failure before the tracking ticket). Nothing to post on; the
             # error is still in the state record and the logs for the admin to find.
             return None
-        await self._ticket_manager.comment(
+        comment_id = await self._ticket_manager.comment(
             ticket_key,
             build_error_comment(
                 admin_account_id=tenant.admin_account_id,
@@ -103,4 +114,6 @@ class ErrorHandler:
                 correlation_id=state.correlation_id,
             ),
         )
+        if comment_id and self._on_comment is not None:
+            self._on_comment(comment_id)
         return ticket_key

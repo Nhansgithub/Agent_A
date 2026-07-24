@@ -37,6 +37,23 @@ A good UserDoc usually:
 Write in Markdown. Use `#`/`##` headings, `-` bullets, and numbered lists for procedures. The output
 is a help document, so favour clarity and brevity over completeness-for-its-own-sake.
 
+### The supported Markdown subset
+
+The draft is converted to a Confluence page and later exported back as a `.md` file, so it must stay
+inside the subset that survives that round trip:
+
+- `#`…`######` headings
+- paragraphs
+- `-` bullet lists and `1.` numbered lists
+- `**bold**`, `*italic*`, `` `inline code` ``
+- ``` fenced code blocks
+- `[link text](url)`
+
+**Never emit raw HTML** — not `<table>`, not `<div>`, not `<br>`, not inline styles or `width=`
+attributes. Anything outside the subset above is escaped during conversion and renders on the page as
+visible literal markup (`&lt;table&gt;`), which looks broken to the reader. Markdown has no way to
+express a multi-column page layout; do not try to fake one.
+
 ## Handling gaps in the PRD
 
 You will often have to fill a small gap the PRD left implicit. Do it with a **reasonable, stated
@@ -71,6 +88,13 @@ Review ticket to Done. Do not treat your own critique as approval.
 When you revise, apply the confirmed structured feedback precisely, preserve everything the PM did not
 ask to change, and keep the document coherent (don't leave a dangling reference to a section you
 removed). You will also be asked to summarize what changed — keep that summary specific and short.
+
+**If a piece of feedback cannot be expressed in the supported subset** — a two-column layout, a
+coloured callout, a specific font — apply every other point, leave that part in valid Markdown, and
+say plainly in your change summary that you could not do it and why. Never emit raw HTML to satisfy a
+formatting request: a page of escaped `&lt;td&gt;` tags serves the reader far worse than the plain
+Markdown version, and the PM cannot see that it broke until they open the page. Silently doing
+nothing is equally wrong — the PM must learn from the summary that the request was not applied.
 
 ## Output contract
 

@@ -49,6 +49,21 @@ class JiraIssue:
 
 
 @dataclass(frozen=True, slots=True)
+class JiraComment:
+    """One comment on a Jira issue, flattened to plain text (FR-09 feedback / EH-02 resume).
+
+    The body arrives as ADF; the adapter flattens it with `adf.extract_text` so callers read what the
+    human actually wrote, not a JSON tree. `author_account_id` is what distinguishes a human comment
+    from the agent's own (AD-10) — the review loop only acts on human comments.
+    """
+
+    id: str
+    author_account_id: str
+    body_text: str
+    created: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ConfluencePage:
     id: str
     title: str

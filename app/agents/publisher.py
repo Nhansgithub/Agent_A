@@ -41,6 +41,10 @@ class PublishResult:
     restriction_applied: bool
     moved: bool
     exported: bool
+    restriction_skipped: bool = False
+    """True when the tenant opted out of FR-15 step 1 (`require_edit_restriction: false`). The caller
+    surfaces this to the humans — a published page that is still editable must not look identical to
+    a protected one."""
 
 
 #: Called after each publish side-effect to persist its sub-checkpoint (AD-18). Non-`stage` markers,
@@ -149,7 +153,12 @@ class Publisher:
         """
         # (1) Confluence edit restriction — restricts *who may edit*, not a content freeze (AD-18).
         # The agent account and any space admins are always included, so a re-apply cannot lock out.
-        if not restriction_done:
+        # Skipped only when the tenant explicitly opted out (Confluence Free has no restrictions —
+        # schema note on `require_edit_restriction`, BLOCKERS.md → B-7). A skip records nothing: the
+        # checkpoint must never claim a restriction that was not applied, or a later resume would
+        # believe the page is protected when it is editable by anyone.
+        restriction_skipped = not tenant.require_edit_restriction
+        if not restriction_done and not restriction_skipped:
             allowed = [agent_account_id, *space_admin_account_ids]
             await self._confluence.set_edit_restriction(page_id, allowed_account_ids=allowed)
             await on_step(restriction_applied_at=utc_now())
@@ -170,9 +179,10 @@ class Publisher:
 
         return PublishResult(
             md_export_path=md_path,
-            restriction_applied=not restriction_done,
+            restriction_applied=not restriction_done and not restriction_skipped,
             moved=not move_done,
             exported=not export_done,
+            restriction_skipped=restriction_skipped,
         )
 
     @staticmethod

@@ -185,6 +185,13 @@ _UL_ITEM = re.compile(r"^[-*]\s+(.*)$")
 _OL_ITEM = re.compile(r"^\d+[.)]\s+(.*)$")
 _FENCE = re.compile(r"^```(\w*)\s*$")
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+#: A line consisting solely of HTML tags and whitespace — e.g. `<table> <tr> <td width="50%">`.
+#: The Author's SKILL.md forbids raw HTML, but if one slips through, escaping it would render the
+#: literal markup as visible page text. Such a line carries no prose, so dropping it is lossless and
+#: degrades to plain single-column Markdown instead of a page full of `&lt;td&gt;`. Lines that mix
+#: tags with real words are still escaped, so the words survive and the slip stays visible.
+_TAG_ONLY_LINE = re.compile(r"^(?:\s*</?[a-zA-Z][^>]*/?>\s*)+$")
 _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _ITALIC = re.compile(r"(?<![*\w])\*([^*]+)\*(?![*\w])")
 _CODE = re.compile(r"`([^`]+)`")
@@ -259,6 +266,14 @@ def markdown_to_storage(markdown: str) -> str:
         if not stripped:
             flush_paragraph()
             close_lists()
+            i += 1
+            continue
+
+        if _TAG_ONLY_LINE.match(stripped):
+            # Stray layout markup (see _TAG_ONLY_LINE). Treated as a block break so the prose either
+            # side is not glued into one paragraph. Reached only after the fenced-code branch above,
+            # so an HTML example inside ``` is never touched.
+            flush_paragraph()
             i += 1
             continue
 

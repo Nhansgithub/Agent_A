@@ -69,3 +69,32 @@ def test_the_shipped_example_registry_composes() -> None:
     example = Path(__file__).resolve().parents[1] / "config" / "registry.example.yaml"
     composition = Composition(ConfigRegistry.from_yaml_file(example), env={})
     assert composition.orchestrator._handlers.missing() == []
+
+
+def test_health_reports_a_missing_config_so_the_deploy_smoke_test_can_catch_it(tmp_path) -> None:
+    """A container started without its config volume is alive but deaf — /health must say so.
+
+    Otherwise the Droplet answers `{"status": "ok"}`, the smoke test passes, webhooks get registered,
+    and every Atlassian delivery is silently ignored.
+    """
+    from fastapi.testclient import TestClient
+
+    with TestClient(create_app(registry_path=tmp_path / "absent.yaml")) as client:
+        body = client.get("/health").json()
+
+    assert body["status"] == "ok"  # still 200/alive — a restart would not fix a missing mount
+    assert body["config"] == "missing"
+    assert body["webhooks"] == "not-mounted"
+
+
+def test_health_reports_a_loaded_config(tmp_path) -> None:
+    from fastapi.testclient import TestClient
+
+    registry_file = tmp_path / "registry.yaml"
+    registry_file.write_text(yaml.safe_dump(registry_mapping()), encoding="utf-8")
+
+    with TestClient(create_app(registry_path=registry_file)) as client:
+        body = client.get("/health").json()
+
+    assert body["config"] == "loaded"
+    assert body["webhooks"] == "mounted"

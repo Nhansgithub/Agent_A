@@ -1,0 +1,51 @@
+# What must never enter the Docker build context (AD-4, AD-21).
+#
+# The build context is uploaded wholesale to the Docker daemon — and in CI it is the checked-out
+# repo. Two of the rules below are security rules, not size rules:
+#
+#   * `.env` holds the Atlassian API token and the Anthropic key. It must never reach a build
+#     context, an image layer, or a registry. Credentials arrive at runtime via --env-file (AD-4).
+#   * `config/registry.yaml` is one tenant's real account/folder ids. Excluding it keeps the image
+#     **generic** — the same artifact serves every tenant, and the real config is mounted read-only
+#     at run time (`-v /opt/agent/config:/app/config:ro`). Baking a tenant into the image would make
+#     a pushed image tenant-specific and publish those ids to whoever can pull it.
+#
+# The Dockerfile only COPYs `pyproject.toml`, `README.md`, `app/`, and `config/`, so most of the rest
+# is a build-speed concern — but an excluded file cannot be copied by a future edit either.
+
+# --- secrets ---------------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- one tenant's config: mounted at runtime, never baked in ----------------------------------
+config/registry.yaml
+
+# --- runtime state: the live SQLite store and the .md exports (AD-2, FR-15) -------------------
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# --- python ------------------------------------------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- not needed at runtime ---------------------------------------------------------------------
+.git/
+.github/
+tests/
+fixtures/
+scripts/
+planning-artifacts/
+implementation-state/
+*.md
+!README.md
+
+# --- os ------------------------------------------------------------------------------------------
+.DS_Store

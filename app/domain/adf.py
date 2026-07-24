@@ -120,6 +120,12 @@ def extract_text(node: Any) -> str:
     if isinstance(node, dict):
         if node.get("type") == "text":
             return str(node.get("text", ""))
+        if node.get("type") == "hardBreak":
+            # Shift+Enter inside a paragraph. The §6.2 feedback format puts `Section:`, `Issue:` and
+            # `Suggested change:` on their own lines, and a PM typing it that way produces one
+            # paragraph full of hardBreaks — dropping them runs the labels together ("...doesIssue:")
+            # and hides the structure from the Feedback interpreter.
+            return "\n"
         if node.get("type") == "mention":
             return str(node.get("attrs", {}).get("text", ""))
         children = node.get("content")

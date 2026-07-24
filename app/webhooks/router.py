@@ -90,8 +90,16 @@ async def _dispatch(composition: Composition, result) -> None:
         if state is not None:
             adapters = composition._adapters_for(tenant)
             from app.agents.ticket_manager import TicketManager
+            from app.domain.dedupe import DedupeKey
+            from app.domain.events import EventType
 
-            await ErrorHandler(TicketManager(adapters.jira)).surface(
+            def claim(comment_id: str) -> None:
+                repository.record_event_for(
+                    DedupeKey(tenant.project_id, EventType.JIRA_COMMENT_CREATED, comment_id),
+                    run_result.prd_id,
+                )
+
+            await ErrorHandler(TicketManager(adapters.jira), on_comment=claim).surface(
                 state=state, error=run_result.error, tenant=tenant
             )
 
