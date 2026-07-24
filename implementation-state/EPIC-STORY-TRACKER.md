@@ -9,12 +9,12 @@ blocked) · `BLOCKED` (cannot start — see BLOCKERS.md)
 
 **Order of work:** epic 1 → 6; within an epic, `critical-path` before `hardening`.
 
-**Progress: 10 / 39 DONE** — **Epic 1 complete.** Test suite: **278 passed**, ruff clean, **5/5 import-linter contracts kept**.
+**Progress: 18 / 39 DONE** — **Epics 1 & 2 complete.** Test suite: **341 passed**, ruff clean, **5/5 import-linter contracts kept**.
 
 | | Epic | Stories | Done |
 |---|---|---|---|
 | 1 | Multi-Tenant Foundation & Deployable Skeleton | 10 | **10 ✅** |
-| 2 | PRD Detection & Confirmation | 8 | 0 |
+| 2 | PRD Detection & Confirmation | 8 | **8 ✅** |
 | 3 | UserDoc Authoring & Draft Publication | 5 | 0 |
 | 4 | Human Review & Revision Loop | 6 | 0 |
 | 5 | Approval & Publishing | 3 | 0 |
@@ -44,14 +44,14 @@ round-trip Atlassian and LLM calls, advance explicit stages. Everything downstre
 
 | ID | Story | Tag | Governed by | Status | Evidence |
 |---|---|---|---|---|---|
-| 2.1 | Detect a new PRD page in the watched source folder | critical-path | AD-8, AD-9, AD-14, AD-10 | TODO | |
-| 2.2 | Title-gate on the `final_PRD_<name>` pattern | critical-path | AD-8 | TODO | |
-| 2.3 | Classifier agent confirms a genuine finalized PRD | critical-path | AD-17 | TODO | |
-| 2.4 | Classifier held-out fixtures + ×3 eval harness (0-FP / 0-FN bar) | critical-path | AD-17 | TODO | |
-| 2.5 | Locate-or-create the PRD-tracking ticket and drive it to Done | critical-path | AD-13 | TODO | |
-| 2.6 | Title-mismatch / REJECT rename-request task and clean re-entry | hardening | AD-12, AD-9 | TODO | |
-| 2.7 | Self-ingestion defense-in-depth (label + agent-account exclusion) | hardening | AD-10 | TODO | |
-| 2.8 | Cross-org identity fallback for rename-task assignment | hardening | AD-12 | TODO | |
+| 2.1 | Detect a new PRD page in the watched source folder | critical-path | AD-8, AD-9, AD-14, AD-10 | **DONE** | `app/agents/detection.py`; folder check + ancestors fallback. |
+| 2.2 | Title-gate on the `final_PRD_<name>` pattern | critical-path | AD-8 | **DONE** | `matches_prd_title`; mismatch routes to rename, not dropped. |
+| 2.3 | Classifier agent confirms a genuine finalized PRD | critical-path | AD-17 | **DONE** | `app/agents/classifier/{agent,SKILL.md}.py`; model from config, temp 0, JSON parse. |
+| 2.4 | Classifier held-out fixtures + ×3 eval harness (0-FP / 0-FN bar) | critical-path | AD-17 | **DONE (harness)** / **PARTIAL (live run)** | `fixtures/classifier/{dev,holdout}` (5+5), `evaluation.py`, `scripts/run_classifier_eval.py`. Harness unit-tested; **live 0-FP/0-FN run needs the Anthropic key (BLOCKERS B-1)**. |
+| 2.5 | Locate-or-create the PRD-tracking ticket and drive it to Done | critical-path | AD-13 | **DONE** | `app/agents/ticket_manager.py`; adopt-orphan → search → create; AD-13 skip/direct/multi-hop/escalate. |
+| 2.6 | Title-mismatch / REJECT rename-request task and clean re-entry | hardening | AD-12, AD-9 | **DONE** | `create_rename_request` in Review project; self-park + re-upload re-entry (EH-04). |
+| 2.7 | Self-ingestion defense-in-depth (label + agent-account exclusion) | hardening | AD-10 | **DONE** | label + agent-account checks; account resolved once per tenant and cached. |
+| 2.8 | Cross-org identity fallback for rename-task assignment | hardening | AD-12 | **DONE** | `app/agents/identity.py`; override → same-org → email-match → unresolved. |
 
 ## Epic 3 — UserDoc Authoring & Draft Publication
 

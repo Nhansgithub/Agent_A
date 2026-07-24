@@ -188,3 +188,21 @@ tracing — the same reasoning as AD-1 putting all Atlassian I/O behind two adap
 **Alternatives rejected:** decorating each agent's call site (any new agent could forget);
 conditionally skipping the span (makes the NFR configuration-dependent).
 **Revisit if:** span overhead ever shows up in the 1 GB memory envelope — measure before changing.
+
+### D-14 · The rename-request wait self-parks at the current stage  (2026-07-24, stories S2.6/2.1/2.3)
+**Context:** A title mismatch (FR-02a) or a Classifier REJECT (EH-07) files a rename-request task and
+must then wait for a corrected re-upload. The §9 stage set has no dedicated "awaiting_rename" stage,
+and `awaiting_clarification` is semantically the FR-08 PM clarification loop.
+**Decision:** the handler files the task and returns `Park(to_stage=<current stage>)` — a legal
+self-transition — with `pending_gate = UPLOADING_PM_RENAME`. Title-mismatch self-parks at `detected`;
+REJECT self-parks at `confirmed`. The corrected page re-uploads as a new version (EH-04), the
+orchestrator re-enters at that stage, and the stage handler re-runs — now passing.
+**Rationale:** it keeps the §9 stage set intact (no invented stage, no migration), does not conflate
+the rename wait with the PM clarification loop, and models the truth: the run has not advanced past
+detection/confirmation, it is waiting for the input to be fixed. The distinct `pending_gate` value
+keeps it observable and lets the re-file idempotency guard (`rename_request_ticket_key`) work.
+**Alternatives rejected:** a new `awaiting_rename` stage (a schema/state-machine change for a branch
+that the §9 list deliberately omits); reusing `awaiting_clarification` (overloads the FR-08 gate and
+would confuse the Feedback interpreter's routing later).
+**Revisit if:** the rename wait ever needs the AD-22 liveness sweep to watch it — then a dedicated
+stage in `LIVENESS_WATCHED_STAGES` would be worth the change.

@@ -11,56 +11,42 @@
 
 ## Where the build is
 
-**Epic 1 is COMPLETE (10/10).** **10 / 39 stories DONE** overall.
-Test suite: **278 passed**, `ruff check` clean, **5/5 import-linter contracts kept**.
+**Epics 1 (foundation) & 2 (detection/confirmation) are COMPLETE. 18 / 39 stories DONE.**
+Test suite: **341 passed**, `ruff check` clean, **5/5 import-linter contracts kept**.
 
-What exists and works:
+- **Epic 1** — scaffold + pinned deps, config registry, single SQLite store + §9 stage machine,
+  webhook ingress (validate→parse→route→dedupe→admit), both Atlassian adapters, the in-invocation
+  LangGraph orchestrator + serial queue, and the LangSmith tracing harness.
+- **Epic 2** — detection guard (folder + label + agent-account, AD-10), title gate, the Classifier
+  agent + its `SKILL.md`, the held-out eval harness (dev+holdout fixtures, ×3, confusion matrix,
+  flake budget), the ticket manager (FR-04 adopt/search/create + AD-13 drive-to-done + the AD-15
+  never-transition-a-gate interlock), the FR-02a rename-request path, and AD-12 identity resolution.
+  All wired into the orchestrator as the `detected → confirmed → prd_ticket_done → drafted` handlers.
 
-- **Scaffold + pinned deps** (S1.1). Every Architecture Spine Stack-table version resolved exactly as
-  specified; `langgraph-api` is absent from the resolved tree (NFR-10 holds and is now a test).
-- **Config registry** (S1.2). `TenantConfig` / `SystemConfig` with env-ref-only credentials, folder
-  and project-key indexes for AD-3 routing, and load-time rejection of a published folder equal to the
-  watched source folder (the primary AD-10 self-ingestion guard). NFR-05 grep-clean is an automated test.
-- **Single durable store** (S1.3). `Stage` / `PendingGate` / `QueueStatus` enums, the §10 `PrdState`
-  record, `Database` (WAL for litestream, AD-23) and `StateRepository` — with stage+id written in one
-  transaction (AD-11) and gate-skipping transitions rejected (AD-15).
-
-- **Ingress pipeline** (S1.4–1.6). `authenticate → parse → resolve tenant → dedupe-check → admit`,
-  with a typed outcome for every drop reason. Admission writes the dedupe key and the PRD row in one
-  transaction, and the UNIQUE constraint *is* the duplicate check (not check-then-write).
-
-- **Both Atlassian adapters** (S1.7–1.8). Jira v3 with mandatory ADF bodies; Confluence v2 with the
-  two v1 exceptions (folder move, content restrictions) and a storage→Markdown converter.
-- **Orchestrator + serial queue** (S1.9). Load → re-enter the graph at the recorded stage → run what
-  can advance → persist per stage boundary → stop. LangGraph is in-invocation only (`InMemorySaver`,
-  fresh graph per invocation). Handlers return outcomes; only the orchestrator writes `stage`.
-- **LLM runtime + tracing** (S1.10). One shared Anthropic client; every call wrapped in a span
-  carrying latency, tokens, cost, correlation id, and `review_round`. Content gating defaults to off.
-
-Nothing is blocked yet — the whole suite runs offline with no credentials. Live verification of the
-adapters waits on the Atlassian API token (BLOCKERS → OPEN).
-
----
+**One PARTIAL:** S2.4's *live* 0-FP/0-FN classifier measurement needs the Anthropic key (BLOCKERS
+B-1). The harness and fixtures are done and offline-tested; only the real Claude accuracy run waits.
+Run it later with `.venv/bin/python scripts/run_classifier_eval.py`.
 
 ## ▶ Next Action
 
-**Epic 2 — PRD Detection & Confirmation.** Start with **Story 2.1** (detect a new PRD page in the
-watched source folder), then 2.2 → 2.5 (critical path), then 2.6 → 2.8 (hardening).
+**Epic 3 — UserDoc Authoring & Draft Publication.** The flow currently walks to `drafted` and stops
+there (no handler yet). Epic 3 fills `Stage.DRAFTED`'s handler and the review-request framing.
 
-Epic 1 left the seams these plug into:
+Stories in order (all critical-path):
+- **3.1** Author agent drafts the first UserDoc (structure via prompt + `SKILL.md`, no fixed template).
+- **3.2** One self-critique pass (draft → critique → single revision). A *drafting aid only* — never
+  an acceptance gate; the human PM PASS is the sole quality gate (AD-17).
+- **3.3** Publish the draft to the Confluence draft folder: create page, v1 move into the draft
+  folder, stamp `agent-generated` label + `prd_id` content property, record `userdoc_page_id`
+  (find-or-create by marker for AD-11 idempotency).
+- **3.4** Create the Review ticket in the Review project assigned to `pm_account_id`; advance to
+  `awaiting_review` (the run now parks on the PM — AD-15).
+- **3.5** Post the framed review-request comment (ADF): tag the PM, request the §6.2 structured
+  format, "put yourself in the users' shoes", and the Done-only pass rule.
 
-- Register handlers on `HandlerRegistry` for `Stage.DETECTED` (2.1–2.3) and `Stage.CONFIRMED` (2.5).
-  `registry.missing()` lists advancing stages still unhandled.
-- Detection needs `ConfluenceAdapter.get_page_ancestors()` when the webhook payload omits the
-  container, plus the AD-10 triple guard: watched-folder **and** no `agent-generated` label **and**
-  not authored by the agent account (resolve once per tenant via `get_current_user`, then cache).
-- The Classifier calls `LlmClient.complete(model=system.models.classifier, ...)` — model from config
-  (AD-17), never a literal.
-
-**Story 2.4 is the one hard, measurable gate** (0 FP / 0 FN on the *holdout* set, ×3, confusion
-matrix). Build the fixture sets under `fixtures/classifier/{dev,holdout}/` early — the readiness
-report calls it the riskiest single deliverable. The eval harness can be written and unit-tested
-against a fake LLM now; only the *live* accuracy run needs the Anthropic key.
+Seams ready: `Author` uses `LlmClient.complete(model=system.models.author, ...)`; publication uses
+`ConfluenceAdapter.create_page`/`move_page`/`stamp_agent_generated`/`set_content_property` and
+`find_page_by_prd_marker`; the Review ticket uses `TicketManager` + `adf.mention`.
 
 ## Environment notes
 

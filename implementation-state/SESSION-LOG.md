@@ -274,3 +274,49 @@ rejects (`detected → awaiting_review`). The guard working on my own test code 
 configuration-dependent).
 
 **Next:** Epic 2 — PRD Detection & Confirmation, starting at Story 2.1.
+
+---
+
+## 2026-07-24 · Session 1 (cont.) — Epic 2: PRD Detection & Confirmation · **COMPLETE (8/8)**
+
+Built the five agents Epic 2 needs, then wired them into the orchestrator's stage machine.
+
+### Agents
+- **Detection** (`app/agents/detection.py`, S2.1/2.2/2.7): the AD-10 admission guard in order —
+  watched-folder (primary), then label + agent-account (defense-in-depth), then title gate. A title
+  mismatch routes to rename rather than being dropped. The agent account is resolved once per tenant
+  and cached (AD-10's "one source" rule), verified by a test asserting a single `get_current_user`.
+- **Classifier** (`app/agents/classifier/`, S2.3): thin agent over a precise `SKILL.md` rubric; model
+  from config, temperature 0, tolerant JSON parse. A parse failure raises rather than silently
+  becoming a REJECT — a misbehaving classifier must not quietly pass the 0-FN bar.
+- **Eval harness** (`app/agents/classifier/evaluation.py`, S2.4): dev + holdout fixtures (5+5,
+  disjoint, both labels each), ×3 runs, confusion matrix, flake budget. The bar is 0-FP/0-FN **and**
+  no flakes — an unstable pass is not a pass (AD-17 "distribution, not a boolean"). `scripts/run_
+  classifier_eval.py` runs it live. **Harness fully unit-tested; the live accuracy run is PARTIAL
+  pending the Anthropic key.**
+- **Ticket manager** (`app/agents/ticket_manager.py`, S2.5/2.6): FR-04 adopt-orphan → search → create,
+  then AD-13 drive-to-done (skip-if-done / direct / config multi-hop / escalate). A method-level
+  interlock **refuses to transition a Review or Publishing ticket** — AD-15 as code, not convention.
+  Plus the FR-02a rename-request task in the Review project.
+- **Identity** (`app/agents/identity.py`, S2.8): AD-12 resolution — config override → same-org
+  accountId → email match → unresolved (create the task unassigned for the admin rather than
+  mis-assign).
+
+### Orchestration
+- `app/orchestrator/handlers_detection.py`: the `detected → confirmed → prd_ticket_done` handlers.
+  Title-mismatch (FR-02a) and Classifier-REJECT (EH-07) both **self-park at the current stage** with
+  `pending_gate = UPLOADING_PM_RENAME`, rather than inventing a stage or overloading
+  `awaiting_clarification` (the FR-08 PM loop). A corrected re-upload arrives as a new page version
+  (EH-04), re-enters at that stage, and re-runs — now passing. `test_handlers_detection.py` proves
+  the full walk to `drafted` and both rename branches, including that the rename task is not filed
+  twice on a re-entry (AD-11).
+
+**Suite: 341 passed. ruff clean. 5/5 import-linter contracts kept.**
+
+**Decisions recorded:** D-14 (rename-wait self-parks at the current stage).
+
+**One PARTIAL:** S2.4's live 0-FP/0-FN measurement needs the Anthropic key. Everything else in Epic 2
+is DONE and offline-tested.
+
+**Next:** Epic 3 — UserDoc Authoring & Draft Publication (the Author agent, self-critique, draft
+publication, Review ticket, framed review request).
