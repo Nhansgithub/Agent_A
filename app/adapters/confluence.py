@@ -108,7 +108,9 @@ class ConfluenceAdapter:
         """
         body = await self._client.request(
             "GET",
-            f"{V2}/folders/{folder_id}/children",
+            # v2 folder children live at /direct-children, NOT /children (verified against the live
+            # API — /children 404s to the web UI). This is the AD-11 orphan-adoption read.
+            f"{V2}/folders/{folder_id}/direct-children",
             operation="find_page_by_prd_marker",
             params={"limit": 100},
             context={"folder": folder_id},
