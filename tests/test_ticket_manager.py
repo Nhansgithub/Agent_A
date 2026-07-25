@@ -314,7 +314,7 @@ async def test_every_created_ticket_is_labelled_agent_generated() -> None:
         )
 
 
-async def test_publishing_ticket_assigns_the_head_of_product_but_does_not_spoof_the_reporter() -> None:
+async def test_publishing_ticket_assigns_hop_without_spoofing_the_reporter() -> None:
     """FR-13 is satisfied by the assignee; the Reporter is left to default to the agent (D-33)."""
     jira = FakeJira()
 
