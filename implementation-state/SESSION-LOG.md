@@ -661,3 +661,34 @@ the fragile inline `startswith` check in publishing removed. AD-4-clean (summary
 
 **Tests:** 489 → 492. New: adapter typed-skip + none-when-only-other-type; handler
 after-rename-creates-Review. Suite green, ruff clean, 5/5 contracts.
+
+---
+
+## Session 3 (cont.) — 2026-07-25 · Ticket authorship / attribution (D-33)
+
+**Asked:** why do agent tickets look authored by a human account, and why does the Publishing ticket
+show the **Head of Product as both Reporter and Assignee**? Plus: can tickets be made visibly
+agent-authored so the team knows the flow created them?
+
+**Audit (5-agent adversarial verification).** Two independent causes:
+1. **Single-account auth.** One Basic-auth identity per product per tenant (the `.env` token); it is
+   the immutable Jira **Creator** of every ticket/comment/page. No per-role token switching anywhere.
+   (Nuance: Jira and Confluence resolve *separate* refs `ALPHA_JIRA`/`ALPHA_CONF`; AD-10 *assumes*
+   they are the same account but nothing enforces it.)
+2. **A lone Reporter override.** `create_publishing_ticket` was the only create passing
+   `reporter_account_id` (= HoP), from a literal reading of FR-13 "reported to … the Head of Product".
+   Undocumented, untested, inconsistent with the other three tickets, and misleading (the agent files
+   it). The binding Spine renders FR-13 as "@Head of Product" — assignee/mention, not a Reporter field.
+
+**Shipped (all three routes Nhan chose):**
+- **Route 2** — removed the reporter override; the Publishing ticket keeps `assignee = HoP`, Reporter
+  now defaults to the agent account like every other ticket.
+- **Route 3** — all four ticket creates now stamp the reserved `agent-generated` label (via
+  `create_issue(extra_labels=…)`): an in-Jira, filterable "from the agent flow" marker, account-agnostic.
+- **Route 1** — documented as a human gate: [BLOCKERS.md](BLOCKERS.md) B-8 + SETUP-GUIDE Part 1
+  ("Recommended: a dedicated UserDoc Agent account"). Only this changes the immutable Creator field;
+  it needs an org admin + a licensed seat, so it is provisioning, not code.
+
+**Tests:** 492 → 496. New: all-four-tickets-labelled; Publishing assigns HoP with no reporter; Review
+assigns PM with no reporter; adapter carries `extra_labels` into the payload. The fake `create_issue`
+now captures assignee/reporter/labels. Suite green, ruff clean, 5/5 contracts. Recorded as **D-33**.

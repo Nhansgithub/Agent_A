@@ -471,3 +471,40 @@ AD-4-clean — and it is the pattern already in the codebase.
 if one exists **and** skips the rename ticket — so no duplicate and no mis-adoption. Covered by
 adapter tests (typed skip + none-when-only-other-type) and an end-to-end handler test
 (after-rename → Review ticket created).
+
+### D-33 · Tickets are labelled `agent-generated`; the Publishing ticket no longer spoofs the Reporter  (2026-07-25, Nhan's request)
+**Context:** Nhan asked why agent-created tickets appear to be authored by a human account, and in
+particular why the Publishing ticket shows the **Head of Product as both Reporter and Assignee**. Audit
+(5-agent verification) found two causes. (1) The system authenticates as a single account — whatever
+login owns the `.env` token — which is the immutable Jira **Creator** of every ticket. (2)
+`create_publishing_ticket` alone passed `reporter_account_id=head_of_product_account_id`
+(ticket_manager.py:300) — the only Reporter override in the codebase. It came from a literal reading of
+FR-13 "reported to / assigned for approval by the Head of Product" (PRD §12 / epics.md echo it), but
+the Architecture Spine and solution-design render FR-13 as "@Head of Product" (assignee/mention
+semantics), no AD mandates the Reporter field, and no test pinned it. The three other ticket types
+never set a reporter, so the Publishing ticket was inconsistent and misstated who filed it.
+**Decision:** Two code changes plus one setup gate, all requested by Nhan (all three "routes"):
+- **Route 2 —** delete the `reporter_account_id=head_of_product_account_id` override. FR-13's "reported
+  to / assigned for approval by" is satisfied by the **assignee** (unchanged) and the publisher's
+  @-mention; the Reporter now defaults to the agent account like every other ticket.
+- **Route 3 —** stamp the reserved `AGENT_GENERATED_LABEL` (`agent-generated`) on all four ticket
+  creates via `create_issue(extra_labels=…)`, giving an in-Jira, filterable "from the agent flow"
+  marker that is independent of which account holds the token.
+- **Route 1 (human gate, [BLOCKERS.md](BLOCKERS.md) B-8) —** provision a dedicated "UserDoc Agent"
+  Atlassian account to own the token, so the immutable **Creator** field is the agent. Only this moves
+  Creator off a human; it needs an org admin + a licensed seat, so it is a human-block gate, not code.
+**Rationale:** serves NFR-01/traceability and plain honesty of provenance — the agent files these
+tickets, so it should read as the reporter/creator, and the team should be able to see and filter
+"made by the agent". Reusing the single AD-4-sanctioned cross-tenant label keeps the tree grep-clean;
+the label is functionally inert on Jira (detection only inspects Confluence page labels), so it is a
+pure visibility marker there.
+**Alternatives rejected:** a new Jira-only label constant (a second cross-tenant constant AD-4
+discourages, and `agent-generated` reads correctly enough); keeping reporter=HoP (misleading and
+undocumented); a code-only fix without Route 1 (cannot change the immutable Creator field).
+**Tests:** `test_ticket_manager.py` — the fake `create_issue` now captures assignee/reporter/labels;
+new tests assert all four creates carry `agent-generated`, the Publishing ticket assigns the HoP with
+**no** reporter, and the Review ticket assigns the PM with no reporter. `test_jira_adapter.py` — a new
+test asserts `extra_labels` reach the create payload. Suite 496 passing, ruff clean, 5/5 contracts.
+**Revisit if:** a tenant's Jira workflow makes the `agent-generated` label meaningful (e.g. an
+automation rule keys on it) and it needs to be Jira-specific, or FR-13 is amended to genuinely require
+a specific Reporter.

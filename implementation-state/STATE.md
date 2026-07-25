@@ -3,9 +3,14 @@
 > **This is the file to read first in every session.** It answers exactly one question:
 > *what do I do next?* Keep it short and current. Update it at every story boundary.
 
-**Last updated:** 2026-07-25 (session 3 — conversational review loop, FR-10a)
+**Last updated:** 2026-07-25 (session 3 — ticket attribution / authorship, D-33)
 **Phase:** Phase 4 — Implementation
 **Scope:** DEMO with FULL HARDENING
+
+> **Latest change (D-33):** agent-created Jira tickets are now stamped `agent-generated` and the
+> Publishing ticket no longer spoofs the Reporter to the Head of Product (assignee unchanged). To move
+> the immutable Jira **Creator** off a personal account, provision a dedicated agent account —
+> [BLOCKERS.md](BLOCKERS.md) B-8 + SETUP-GUIDE Part 1. Suite 496 green, ruff clean, 5/5 contracts.
 
 ---
 

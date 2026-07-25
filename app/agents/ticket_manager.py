@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.adapters.jira import JiraAdapter
+from app.config.constants import AGENT_GENERATED_LABEL
 from app.config.schema import TenantConfig
 from app.domain.atlassian import JiraIssue
 from app.domain.errors import AgentError
@@ -86,6 +87,7 @@ class TicketManager:
                 description=self._tracking_description(prd_name, prd_url),
                 issue_type="Task",
                 prd_id=prd_id,
+                extra_labels=(AGENT_GENERATED_LABEL,),
             )
             created = True
             # Re-read: the create response is sparse, and the transition logic needs the status.
@@ -224,6 +226,7 @@ class TicketManager:
             issue_type="Task",
             assignee_account_id=assignee_account_id,
             prd_id=prd_id,
+            extra_labels=(AGENT_GENERATED_LABEL,),
         )
 
     @staticmethod
@@ -282,6 +285,7 @@ class TicketManager:
             issue_type="Task",
             assignee_account_id=tenant.pm_account_id,
             prd_id=prd_id,
+            extra_labels=(AGENT_GENERATED_LABEL,),
         )
 
     async def create_publishing_ticket(
@@ -290,6 +294,12 @@ class TicketManager:
         """Create the Publishing ticket in the Main project for the Head of Product (FR-13).
 
         Also a human gate — the agent never transitions it (AD-15).
+
+        FR-13's "reported to / assigned for approval by the Head of Product" is honoured by the
+        **assignee** (and the @-mention the publisher posts), so the gate lands on the Head of
+        Product. The Jira *Reporter* field is deliberately left to default to the agent account:
+        the agent files this ticket, so a Reporter of the Head of Product would misstate who raised
+        it and diverge from the other three ticket types, which never set a reporter (D-33).
         """
         return await self._jira.create_issue(
             project_key=tenant.jira_main_project_key,
@@ -297,8 +307,8 @@ class TicketManager:
             description=self._publishing_description(userdoc_title, draft_page_url),
             issue_type="Task",
             assignee_account_id=tenant.head_of_product_account_id,
-            reporter_account_id=tenant.head_of_product_account_id,
             prd_id=prd_id,
+            extra_labels=(AGENT_GENERATED_LABEL,),
         )
 
     async def find_ticket_by_marker(

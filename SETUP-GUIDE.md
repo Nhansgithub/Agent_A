@@ -38,9 +38,29 @@ Work top to bottom. Each part tells you exactly which value it produces.
 An API token is how the agent proves it is allowed to act in your Jira and Confluence. It works like
 a password, but you can revoke it without changing your own login.
 
-**Important:** the agent acts *as the account that owns the token*. For the demo, using your own
-account is fine. For production you would create a separate "service account" so the agent's actions
-are distinguishable from yours in the history.
+**Important:** the agent acts *as the account that owns the token*. Whatever login owns this token
+becomes the **Creator** of every ticket and the author of every comment and draft page — and in Jira
+Cloud the Creator field can never be changed after the fact. For the demo, using your own account
+works, but then every ticket looks like *you* filed it. To make it obvious to the whole team that the
+flow — not a person — produced these tickets, create a dedicated agent account (see the box below).
+
+> **Recommended for a shared team: a dedicated "UserDoc Agent" account.**
+> 1. Have an Atlassian **org admin** invite a new user, e.g. `userdoc-agent@yourcompany.com`, and name
+>    it **UserDoc Agent** (this name is what everyone will see in the *Reporter* / *Creator* columns).
+> 2. Grant it **product access to both Jira and Confluence** — this consumes one licensed seat per
+>    product (on the Free tier it counts against the ~10-user cap; on paid tiers it is a billable seat).
+> 3. Add it to the **Main** and **Review** Jira projects with a role that allows: *Browse Projects,
+>    Create Issues, Add Comments, Transition Issues, Assign Issues*. Give it **add/edit page** on the
+>    Confluence space (plus the space-restriction permission the publisher needs for FR-15).
+> 4. Log in **as that account** and create the API token (steps 1–5 below) from *its* profile.
+> 5. Put that account's email + token in `.env` as the Atlassian credentials. No code or
+>    `config/registry.yaml` change is needed — the agent already stamps every ticket with an
+>    `agent-generated` label and no longer overrides any Reporter to a human (D-33), so a dedicated
+>    account is all that is required for full "made by the agent" attribution.
+>
+> Bonus: a distinct agent account also makes the AD-10 self-author detection guard and the review
+> transcript's speaker labelling exact, instead of relying on the token happening not to be a
+> reviewer's account.
 
 1. Go to **https://id.atlassian.com/manage-profile/security/api-tokens**
    (or: click your avatar in Jira → **Manage account** → **Security** → **Create and manage API tokens**).

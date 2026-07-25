@@ -226,6 +226,24 @@ async def test_create_issue_stamps_the_prd_correlation_label() -> None:
     )
 
 
+async def test_create_issue_carries_extra_labels_into_the_payload() -> None:
+    """`extra_labels` (e.g. the `agent-generated` marker) rides alongside the AD-11 prd- label."""
+    adapter, transport = build(json_response(201, {"key": "MAIN-8"}))
+
+    issue = await adapter.create_issue(
+        project_key="MAIN",
+        summary="UserDoc publishing",
+        description=adf.text_to_doc("body"),
+        prd_id="page-123",
+        extra_labels=("agent-generated",),
+    )
+
+    assert issue.key == "MAIN-8"
+    payload = transport.requests[0].content
+    assert b"agent-generated" in payload and b"prd-page-123" in payload
+    assert "agent-generated" in issue.labels and "prd-page-123" in issue.labels
+
+
 async def test_find_issue_by_prd_marker_adopts_an_orphan() -> None:
     """The create-succeeded-then-crashed-before-persisting window (AD-11 hardening)."""
     adapter, transport = build(

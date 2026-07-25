@@ -80,6 +80,34 @@ component verified **only** offline — see STATE.md → Next Action.
 
 ---
 
+## OPEN — B-8 · Dedicated "UserDoc Agent" Atlassian account (attribution enhancement)
+
+**Blocks:** nothing spec'd — this is a **quality/attribution enhancement Nhan asked for** (2026-07-25):
+make agent-created tickets visibly the *agent's*, so the whole team sees the flow (not a person)
+produced them. Routes 2 + 3 (code) already shipped; this is Route 1, the part only a human can do.
+
+**Why the agent cannot self-serve it.** Creating an Atlassian user and granting product access is an
+**org-admin action that consumes a licensed seat** (per product; on Free it counts against the
+~10-user cap). No token or code change can mint an account.
+
+**What is needed (exact steps in [`../SETUP-GUIDE.md`](../SETUP-GUIDE.md) → Part 1, "Recommended…"
+box):**
+1. Org admin invites a user `userdoc-agent@…`, display name **UserDoc Agent**.
+2. Grant it Jira product access + membership in the Main and Review projects (Create/Comment/
+   Transition/Assign), and Confluence add/edit-page + the restriction permission FR-15 needs.
+3. Log in **as that account**, create its API token, and put its email+token in `/opt/agent/.env`
+   (Droplet) and the local `.env` under `ALPHA_JIRA_*` / `ALPHA_CONF_*`. **No `registry.yaml` change.**
+4. Re-run `scripts/verify_setup.py`; the account's own `accountId` becomes the AD-10 agent identity.
+
+**Why it is worth doing.** In Jira Cloud the **Creator** field is immutable and always the token
+account — so only this step (not code) can move "who created it" off a human. It also makes the AD-10
+self-author guard and the FR-10a transcript speaker-labelling exact rather than assumption-dependent.
+
+**Until done:** tickets carry the `agent-generated` label and no longer spoof a human Reporter (D-33),
+but their Creator is still whatever personal account owns the current token.
+
+---
+
 ## ANTICIPATED (reference detail)
 
 ---

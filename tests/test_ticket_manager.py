@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.agents.ticket_manager import TicketManager
+from app.config.constants import AGENT_GENERATED_LABEL
 from app.domain.atlassian import JiraIssue, JiraTransition
 from app.domain.errors import AgentError
 from tests.conftest import tenant_entry
@@ -44,11 +45,29 @@ class FakeJira:
         return self.transitions.get(key, [])
 
     async def create_issue(
-        self, *, project_key, summary, description, issue_type="Task", prd_id=None, **kw
+        self,
+        *,
+        project_key,
+        summary,
+        description,
+        issue_type="Task",
+        prd_id=None,
+        assignee_account_id=None,
+        reporter_account_id=None,
+        extra_labels=(),
     ):
         key = f"{project_key}-{self._next_key}"
         self._next_key += 1
-        self.created.append({"key": key, "summary": summary, "prd_id": prd_id})
+        self.created.append(
+            {
+                "key": key,
+                "summary": summary,
+                "prd_id": prd_id,
+                "assignee": assignee_account_id,
+                "reporter": reporter_account_id,
+                "labels": tuple(extra_labels),
+            }
+        )
         issue = JiraIssue(key=key, summary=summary, status_name="To Do", status_category="new")
         self.issues[key] = issue
         return issue
@@ -252,3 +271,71 @@ async def test_refuses_to_transition_a_human_gate_ticket(role: str) -> None:
     assert jira.performed_transitions == [], (
         "not a single transition may be attempted on a gate ticket"
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# Attribution: every agent-created ticket is stamped `agent-generated`, and no ticket spoofs the
+# Reporter field to a human (D-33). The agent files the ticket; the gate lands via the assignee.
+# ---------------------------------------------------------------------------------------------
+
+
+async def test_every_created_ticket_is_labelled_agent_generated() -> None:
+    """The whole team can see a ticket came from the agent flow, independent of the account used."""
+    jira = FakeJira()
+
+    async def get_issue(key):
+        return JiraIssue(key=key, summary="s", status_name="Done", status_category="done")
+
+    jira.get_issue = get_issue  # type: ignore[assignment]
+    manager = TicketManager(jira)
+
+    await manager.locate_or_create_tracking_ticket(
+        tenant=TENANT, prd_id="page-1", prd_name="Widget", prd_url="url"
+    )
+    await manager.create_review_ticket(
+        tenant=TENANT, prd_id="page-1", userdoc_title="Widget guide", draft_page_url="url"
+    )
+    await manager.create_publishing_ticket(
+        tenant=TENANT, prd_id="page-1", userdoc_title="Widget guide", draft_page_url="url"
+    )
+    await manager.create_rename_request(
+        tenant=TENANT,
+        prd_id="page-1",
+        page_title="draft",
+        page_url="url",
+        assignee_account_id="acct-uploader",
+        reason="not a final_PRD_ title",
+    )
+
+    assert jira.created, "sanity: tickets were created"
+    for record in jira.created:
+        assert AGENT_GENERATED_LABEL in record["labels"], (
+            f"{record['summary']!r} must carry the agent-generated marker"
+        )
+
+
+async def test_publishing_ticket_assigns_the_head_of_product_but_does_not_spoof_the_reporter() -> None:
+    """FR-13 is satisfied by the assignee; the Reporter is left to default to the agent (D-33)."""
+    jira = FakeJira()
+
+    await TicketManager(jira).create_publishing_ticket(
+        tenant=TENANT, prd_id="page-1", userdoc_title="Widget guide", draft_page_url="url"
+    )
+
+    record = jira.created[0]
+    assert record["assignee"] == TENANT.head_of_product_account_id, "the gate lands on the HoP"
+    assert record["reporter"] is None, (
+        "the agent files the ticket — it must not report it AS the Head of Product"
+    )
+
+
+async def test_review_ticket_assigns_the_pm_without_setting_a_reporter() -> None:
+    jira = FakeJira()
+
+    await TicketManager(jira).create_review_ticket(
+        tenant=TENANT, prd_id="page-1", userdoc_title="Widget guide", draft_page_url="url"
+    )
+
+    record = jira.created[0]
+    assert record["assignee"] == TENANT.pm_account_id
+    assert record["reporter"] is None
