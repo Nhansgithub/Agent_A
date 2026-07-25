@@ -164,6 +164,14 @@ When feedback is unstructured, the agent SHALL:
 3. **Wait** for the PM's confirming reply before applying any changes.
 Only upon confirmation does it proceed to FR-11.
 
+> **Amendment 2026-07-25 (FR-10a — conversational review loop).** The review loop is a **conversation with memory**, not a sequence of isolated one-shot interpretations. When interpreting any PM comment, the agent SHALL be given the **recent review-ticket transcript** (labelled PM vs agent) and, while awaiting a confirmation, the **exact restatement it proposed**. Consequently the PM's reply to the confirmation question is handled by intent, not just yes/no:
+> - **affirm** (*"yes"*) → apply the restatement as-is;
+> - **affirm with an adjustment** (*"yes, but drop the last point"*) → apply the restatement **edited per the adjustment**, in the same turn, without a second confirmation for a small unambiguous change;
+> - **reject with a new direction** (*"no, I meant the intro"*) → treat as fresh feedback (restate-and-confirm or apply); the direction is never discarded;
+> - **bare reject** (*"no"*) → the agent SHALL **acknowledge on the ticket and ask what to change instead** (tagging the PM), returning to `awaiting_review` for another round. A rejection must **never** be a silent dead-end.
+>
+> This preserves EH-08 (still blocks on a human; never fabricates the answer) and AD-16 (the interpreter's output stays a typed decision; routing stays deterministic) — only the interpreter's *input* gains conversation context. It also fixes a latent defect: `awaiting_structure_confirm → awaiting_review` was not a legal state-machine edge, so a *"no"* raised an internal error; that edge is now part of the §9 machine.
+
 **FR-11 — Apply feedback → new draft.**
 The agent SHALL revise the UserDoc per the (confirmed) structured feedback, update the Confluence draft page, and post a comment (tagging the Reviewer PM) summarizing what changed, then re-request review per FR-07's framing. The loop (FR-07 → FR-11) repeats **uncapped for the demo** until PASS. This is safe because **each round requires a fresh human PM feedback comment** — the loop cannot spin autonomously. The guardrail is **observability, not a hard cap**: the `review_round` counter (§10) and per-round token cost are surfaced in LangSmith (NFR-01 / NFR-09) so runaway cost stays visible.
 

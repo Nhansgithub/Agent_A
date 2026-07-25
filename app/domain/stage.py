@@ -117,7 +117,10 @@ _LEGAL_TRANSITIONS: dict[Stage, frozenset[Stage]] = {
     Stage.AWAITING_CLARIFICATION: frozenset(
         {Stage.PRD_TICKET_DONE, Stage.AWAITING_REVIEW, Stage.REVISING}
     ),
-    Stage.AWAITING_STRUCTURE_CONFIRM: frozenset({Stage.REVISING}),
+    # REVISING when the PM confirms; AWAITING_REVIEW when they reject the restatement — a rejection
+    # returns to open review for another round (FR-10, amendment 2026-07-25). Without this edge a
+    # "no" raised IllegalStageTransition and 500'd the webhook.
+    Stage.AWAITING_STRUCTURE_CONFIRM: frozenset({Stage.REVISING, Stage.AWAITING_REVIEW}),
     Stage.REVISING: frozenset({Stage.AWAITING_REVIEW, Stage.AWAITING_CLARIFICATION}),
     Stage.PASSED: frozenset({Stage.AWAITING_PUBLISH_APPROVAL}),
     Stage.AWAITING_PUBLISH_APPROVAL: frozenset({Stage.PUBLISHING}),

@@ -3,7 +3,7 @@
 > **This is the file to read first in every session.** It answers exactly one question:
 > *what do I do next?* Keep it short and current. Update it at every story boundary.
 
-**Last updated:** 2026-07-24 (session 2)
+**Last updated:** 2026-07-25 (session 3 — conversational review loop, FR-10a)
 **Phase:** Phase 4 — Implementation
 **Scope:** DEMO with FULL HARDENING
 

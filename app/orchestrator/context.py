@@ -149,12 +149,47 @@ class RunContext:
     async def interpret_comment(
         self, *, comment_text: str, awaiting_reply: bool, metadata: CallMetadata
     ) -> FeedbackDecision:
+        """Interpret a PM comment with the review conversation as context (FR-10, AD-16).
+
+        Reads the transcript and the pending restatement from the state + ticket so the interpreter
+        judges a reply in-conversation. Purely enriches the interpreter's *input*; the typed decision
+        and the deterministic routing (AD-16) are unchanged.
+        """
+        state = self._repository.state.require(self.prd_id)
+        conversation = await self._review_conversation(state.review_ticket_key)
         return await self.feedback_interpreter.interpret(
             comment_text=comment_text,
             awaiting_reply=awaiting_reply,
             draft_markdown=await self.current_draft_markdown(),
             prd_markdown=await self.page_markdown(),
+            conversation=conversation,
+            pending_restatement=state.pending_feedback or "",
             metadata=metadata,
+        )
+
+    async def _review_conversation(self, review_ticket_key: str | None) -> tuple:
+        """The review-ticket comment thread, labelled PM vs Agent (AD-10 account), oldest first.
+
+        The transcript is what gives the loop memory. Best-effort: a read failure degrades to no
+        transcript (the interpreter still has the current comment, draft, and PRD) rather than
+        failing the round.
+        """
+        from app.domain.feedback import ReviewTurn, Speaker
+
+        if not review_ticket_key:
+            return ()
+        try:
+            comments = await self.ticket_manager.discussion(review_ticket_key)
+        except Exception:  # noqa: BLE001 — a transcript is an enhancement, never load-bearing
+            return ()
+        agent_account = await self.agent_account_id()
+        return tuple(
+            ReviewTurn(
+                speaker=Speaker.AGENT if c.author_account_id == agent_account else Speaker.PM,
+                text=c.body_text,
+            )
+            for c in comments
+            if c.body_text.strip()
         )
 
     async def post_comment(self, issue_key: str, body: dict) -> None:

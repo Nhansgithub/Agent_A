@@ -58,6 +58,8 @@ Reading inward (the dependency rule is AD-1 — outer depends inward, and **only
 
 **The six agents map to jobs, not services.** Classifier confirms a page is a real PRD (accepted against a **held-out** fixture set — the eval runs ×3 and emits a confusion matrix + flake budget, with the model id pinned in config, AD-17); Ticket manager does all Jira search/create/transition; Author drafts and revises (with one self-critique pass); Feedback interpreter parses PM feedback into a typed **`FeedbackDecision{route, trigger, assumption}`** — the orchestrator's routing off that object is deterministic and unit-tested, and only the LLM that produces it is eval-tested (AD-16) — and runs the clarification/structure loops; Publisher locks, moves, and exports; Error handler surfaces failures and manages resume. All run on the Anthropic Python SDK against the Claude API.
 
+> **Amendment 2026-07-25 — conversational review loop (FR-10a).** The Feedback interpreter reads each PM comment **in the context of the review-ticket discussion**: it is handed the recent transcript (PM/agent-labelled) and the restatement it is awaiting confirmation on, so the loop behaves like a real back-and-forth. A reply can *confirm* (apply the restatement), *confirm with an adjustment* (apply it edited, one turn), *redirect* (*"no, I meant X"* → treated as fresh feedback), or *plainly reject* (the agent asks what to change instead, on the ticket — never a silent dead-end). This is an **input** change only; the typed-decision + deterministic-routing contract (AD-16) is untouched, and the transcript read is best-effort. A plain rejection now returns `awaiting_structure_confirm → awaiting_review`, an edge added to the state machine.
+
 ---
 
 ## 3. End-to-end flow
@@ -108,6 +110,7 @@ stateDiagram-v2
     awaiting_clarification --> awaiting_review: PM answers
     awaiting_review --> awaiting_structure_confirm: plain-language feedback (FR-10)
     awaiting_structure_confirm --> revising: PM confirms
+    awaiting_structure_confirm --> awaiting_review: PM rejects the restatement (FR-10a, amendment 2026-07-25)
     awaiting_review --> revising: structured feedback (FR-11)
     revising --> awaiting_review: new draft + re-request
     awaiting_review --> passed: Review Done = PASS (FR-12)

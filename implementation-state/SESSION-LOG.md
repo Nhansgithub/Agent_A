@@ -606,3 +606,39 @@ Head-of-Product notice (`test_publishing.py`), and the 403 message overrides (`t
 supports it) and the **webhook ingress layer**, which has only ever run offline. The entire live demo
 was driven by `scripts/run_local_demo.py` standing in for webhooks. S6.4 is not fully closed until
 the service is deployed and a real Atlassian delivery starts a run (B-4/B-5).
+
+---
+
+## Session 3 — 2026-07-25 · Conversational review loop (FR-10a)
+
+**Trigger:** Nhan wanted the review loop to be a real brainstorm — the agent should have context and
+memory of the discussion and handle nuanced replies, not just a bare yes/no to its restatement.
+
+**Diagnosis.** Verified the interpreter classified bare yes/no correctly (live) and the "yes" path
+was wired + tested. But the interpreter judged confirmations **blind** — the prompt omitted the
+question and the restatement — so "yes but…" / "no, I meant…" couldn't work. Writing the first
+end-to-end "no" test then exposed a latent crash: `awaiting_structure_confirm → awaiting_review` was
+an illegal state edge, so a plain "no" raised `IllegalStageTransition` (uncaught → HTTP 500 → Atlassian
+retry loop). The "no" path had never had end-to-end coverage.
+
+**Built (D-30 / D-31):**
+- The Feedback interpreter now receives the review-ticket **transcript** (PM/agent-labelled) + the
+  **pending restatement** on every interpretation (new `ReviewTurn`; `TicketManager.discussion()` +
+  `JiraAdapter.get_comments`; assembled in `RunContext.interpret_comment`, best-effort).
+- SKILL.md rewritten for conversational behavior (confirm / confirm-with-adjustment / redirect /
+  bare-reject).
+- Added the missing `awaiting_structure_confirm → awaiting_review` state edge; the not-confirmed
+  branch now posts an acknowledgment (@-mention) asking what to change, and clears the stale
+  restatement — no silent dead-end, no crash.
+- AD-16 preserved: input enrichment only; typed decision + deterministic routing unchanged.
+
+**Live verification** (real model): "yes"→apply as-is · "yes, but keep sharing as 'coming soon'"→
+APPLY with the tweak folded in · "no, I meant Search is too thin"→CONFIRM_STRUCTURE with a fresh
+Search restatement · bare "no"→confirmed=false → orchestrator asks what to change.
+
+**Planning docs amended** (per Nhan's instruction to keep it written): PRD FR-10a, Spine AD-16 note,
+solution-design review-loop + state diagram — all marked "amendment 2026-07-25".
+
+**Tests:** 484 → 489. New: interpreter-carries-transcript, RunContext PM/agent labelling, transcript
+degrades on failure, empty-`structured_feedback` fallback, bare-"no" acknowledgment + legal edge.
+Suite green, ruff clean, 5/5 contracts.

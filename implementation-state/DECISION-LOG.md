@@ -415,3 +415,35 @@ come from the page fetch already made for D-27, so there is no extra call.
 **Rationale:** keeps the single durable store (AD-2) free of runs that can never advance. The guard
 is deliberately conservative — a page with an unknown or nested container is still admitted and left
 to detection's ancestors lookup, so it can never refuse a genuine PRD.
+
+### D-30 · Conversational review loop — the interpreter gets transcript + memory  (2026-07-25, Nhan's request)
+**Context:** the structure-confirmation loop (FR-10) interpreted each PM comment in isolation. A bare
+"yes" happened to work (falls back to the stored restatement), but the interpreter was judging the
+reply **blind** — its prompt never included the question it asked or the restatement it proposed. So
+"yes, but drop the last point" or "no, I meant the intro" could not be handled: the correction had
+no anchor. And a plain "no" was worse than useless (see D-31).
+**Decision (Nhan asked for context + memory + a real brainstorm):** feed the Feedback interpreter the
+**review-ticket transcript** (PM/agent-labelled by AD-10 account) and the **pending restatement** as
+input on every interpretation. New domain type `ReviewTurn`; `TicketManager.discussion()` +
+`JiraAdapter.get_comments` supply the thread; `RunContext.interpret_comment` assembles it. The
+transcript read is best-effort — a Jira failure degrades to no transcript, never a failed round.
+**Why this respects AD-16:** it enriches the interpreter's *input* only. The output is still a typed
+`FeedbackDecision` and the routing is still deterministic + unit-tested. Verified live: "yes"→apply
+as-is; "yes but…"→APPLY with the adjustment folded in; "no, I meant…"→CONFIRM_STRUCTURE with a new
+restatement; bare "no"→CONFIRMATION/confirmed=false. Recorded in the planning docs as amendment
+FR-10a (PRD, Spine AD-16, solution-design), per Nhan's instruction to keep the change written.
+**Alternatives rejected:** storing a `pending_question` state column (a schema migration for something
+the transcript already contains); re-interpreting from scratch each round without memory (the status quo, which is exactly what failed).
+
+### D-31 · Fixed: a rejected restatement 500'd the webhook  (2026-07-25, found while adding D-30 tests)
+**Context:** adding the first end-to-end test of the "no" path surfaced that
+`awaiting_structure_confirm → awaiting_review` was **not a legal edge** in the §9 state machine
+(`AWAITING_STRUCTURE_CONFIRM` allowed only `→ REVISING`). So a PM "no" raised `IllegalStageTransition`
+— a `ValueError`, not an `AgentError`, so it propagated **uncaught** out of `apply_pm_comment` and
+would have returned HTTP 500 to Atlassian, which then retries into the same crash. The clarification
+loop already had the `→ awaiting_review` fallback edge; structure-confirm was missing it.
+**Decision:** add `AWAITING_REVIEW` to `AWAITING_STRUCTURE_CONFIRM`'s legal transitions, and make the
+not-confirmed branch **post an acknowledgment** ("what would you like changed instead?", @-mentioning
+the PM) and clear the stale restatement before returning to review — no silent dead-end, no crash.
+**Found by:** writing the test that should always have existed. The "no" path had **zero** end-to-end
+coverage, which is exactly why a broken state edge shipped. Now covered.

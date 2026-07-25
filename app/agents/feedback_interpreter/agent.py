@@ -16,7 +16,12 @@ import json
 from app.agents.llm import CallMetadata, LlmClient
 from app.agents.skills import load_skill
 from app.domain.errors import AgentError
-from app.domain.feedback import ClarificationTrigger, FeedbackDecision, FeedbackRoute
+from app.domain.feedback import (
+    ClarificationTrigger,
+    FeedbackDecision,
+    FeedbackRoute,
+    ReviewTurn,
+)
 
 _ROLE = "feedback_interpreter"
 
@@ -37,33 +42,72 @@ class FeedbackInterpreter:
         awaiting_reply: bool,
         draft_markdown: str,
         prd_markdown: str,
+        conversation: tuple[ReviewTurn, ...] = (),
+        pending_restatement: str = "",
         metadata: CallMetadata,
     ) -> FeedbackDecision:
-        """Interpret one PM comment.
+        """Interpret one PM comment **in the context of the review conversation** (FR-10).
 
         Args:
             awaiting_reply: True if the run was parked awaiting a structure-confirmation or
                 clarification answer — biases the model toward the CONFIRMATION route.
+            conversation: the recent review-ticket transcript (oldest→newest), so a reply is read
+                as part of the discussion, not in isolation. The current comment is the last PM turn.
+            pending_restatement: the structured feedback the agent last proposed and is awaiting
+                confirmation on (state's `pending_feedback`). Lets the model resolve a "yes",
+                "yes but…", or "no, I meant…" against a concrete anchor rather than guessing.
         """
         response = await self._llm.complete(
             model=self._model,
             system=load_skill(_ROLE),
-            prompt=self._prompt(comment_text, awaiting_reply, draft_markdown, prd_markdown),
+            prompt=self._prompt(
+                comment_text,
+                awaiting_reply,
+                draft_markdown,
+                prd_markdown,
+                conversation,
+                pending_restatement,
+            ),
             metadata=metadata,
         )
         return self._parse(response.text)
 
     @staticmethod
-    def _prompt(comment: str, awaiting_reply: bool, draft: str, prd: str) -> str:
+    def _prompt(
+        comment: str,
+        awaiting_reply: bool,
+        draft: str,
+        prd: str,
+        conversation: tuple[ReviewTurn, ...],
+        pending_restatement: str,
+    ) -> str:
         context = (
             "The draft is currently WAITING on the PM's reply to a question you already asked "
-            "(structure-confirmation or clarification). This comment is most likely that reply.\n\n"
+            "(structure-confirmation or clarification). The newest PM comment below is that reply — "
+            "read it against the conversation and the restatement you proposed.\n\n"
             if awaiting_reply
-            else "The draft is under review; this is a fresh comment from the PM.\n\n"
+            else "The draft is under review; the newest PM comment below is a fresh comment.\n\n"
         )
+
+        transcript = _format_transcript(conversation)
+        transcript_block = (
+            f"Conversation so far on the review ticket (oldest first):\n---\n{transcript}\n---\n\n"
+            if transcript
+            else ""
+        )
+        restatement_block = (
+            "The structured feedback you proposed and are awaiting confirmation on:\n"
+            f"---\n{pending_restatement.strip()}\n---\n\n"
+            if pending_restatement.strip()
+            else ""
+        )
+
         return (
             f"{context}"
-            f"PM comment:\n---\n{comment.strip() or '(empty comment)'}\n---\n\n"
+            f"{transcript_block}"
+            f"{restatement_block}"
+            f"Newest PM comment (the one to classify now):\n---\n"
+            f"{comment.strip() or '(empty comment)'}\n---\n\n"
             f"Current UserDoc draft (Markdown, truncated):\n---\n{draft[:12000]}\n---\n\n"
             f"Source PRD (Markdown, truncated):\n---\n{prd[:12000]}\n---\n\n"
             "Classify this comment per your rubric. Respond with only the JSON object."
@@ -109,6 +153,16 @@ class FeedbackInterpreter:
                 suggested_fix="A CLARIFY route must name one of the four FR-08 triggers (EH-08).",
                 operation="feedback_interpreter.parse",
             ) from exc
+
+
+def _format_transcript(conversation: tuple[ReviewTurn, ...]) -> str:
+    """Render the transcript as `PM:`/`Agent:` lines, bounding total size for the prompt budget."""
+    lines = [
+        f"{turn.speaker.value}: {turn.text.strip()}" for turn in conversation if turn.text.strip()
+    ]
+    text = "\n".join(lines)
+    # Keep the most recent context if the discussion is long — the tail is what a reply refers to.
+    return text[-6000:]
 
 
 def _extract_json(text: str) -> dict | None:

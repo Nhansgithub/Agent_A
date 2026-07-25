@@ -28,6 +28,27 @@ class FeedbackRoute(StrEnum):
     CONFIRMATION = "confirmation"
 
 
+class Speaker(StrEnum):
+    """Who wrote a review-ticket comment, as the interpreter sees the conversation."""
+
+    PM = "PM"
+    AGENT = "Agent"
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewTurn:
+    """One comment in the review-ticket discussion, for the interpreter's conversation memory (FR-10).
+
+    The review loop is a back-and-forth, but each comment used to be interpreted in isolation — so a
+    reply like "yes, but drop the last point" or a bare "no" had no anchor. Feeding the recent
+    transcript (this type, oldest→newest) gives the Feedback interpreter the context to read a reply
+    as part of a conversation rather than a standalone instruction.
+    """
+
+    speaker: Speaker
+    text: str
+
+
 class ClarificationTrigger(StrEnum):
     """The FR-08 enumerated triggers — the ONLY cases where the agent blocks to ask (EH-08).
 

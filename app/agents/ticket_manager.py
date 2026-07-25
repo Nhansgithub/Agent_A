@@ -302,6 +302,14 @@ class TicketManager:
         """Post an ADF comment (FR-07, FR-11, FR-13). Body must be an ADF document."""
         return await self._jira.add_comment(issue_key, body)
 
+    async def discussion(self, issue_key: str, *, limit: int = 30):
+        """The ticket's comment thread, oldest first — the review conversation (FR-10).
+
+        Domain verb over the Jira read: the review loop reasons about the *discussion* on a ticket,
+        not raw comments. Returns `JiraComment`s flattened to plain text.
+        """
+        return await self._jira.get_comments(issue_key, limit=limit)
+
     # -- descriptions --------------------------------------------------------------------------
 
     @staticmethod

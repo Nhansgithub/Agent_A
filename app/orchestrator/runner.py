@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 from app.agents.llm import CallMetadata
 from app.domain.errors import AgentError
+from app.domain.feedback import FeedbackRoute
 from app.domain.stage import PARKED_STAGES, TERMINAL_STAGES, PendingGate, QueueStatus, Stage
 from app.domain.state import PrdState
 from app.orchestrator.feedback_routing import FeedbackAction, route_feedback
@@ -235,12 +236,21 @@ class Orchestrator:
                 queue_status=QueueStatus.IDLE,
             )
         elif outcome.action is FeedbackAction.IGNORE and state.stage is not outcome.target_stage:
-            # PM did not confirm a restatement → back to open review for another round.
+            # PM did not confirm the restatement (a bare "no"). Don't dead-end silently: acknowledge
+            # on the ticket and ask what to change instead, so the loop stays a conversation. The
+            # next comment is then interpreted fresh (it will carry this exchange as transcript).
+            # A "no, I meant X" is NOT this branch — the interpreter, now conversation-aware, routes
+            # that to APPLY / CONFIRM_STRUCTURE with the correction already applied.
+            if decision.route is FeedbackRoute.CONFIRMATION:
+                await context.post_comment(
+                    state.review_ticket_key or "", self._not_confirmed_body(context)
+                )
             self._repository.state.advance_stage(
                 prd_id,
                 outcome.target_stage,
                 pending_gate=outcome.gate,
                 queue_status=QueueStatus.IDLE,
+                pending_feedback=None,  # the rejected restatement is stale — don't carry it forward
             )
 
     @staticmethod
@@ -269,6 +279,21 @@ class Orchestrator:
                 adf.text(" before I revise, I need to check one thing:"),
             ),
             adf.paragraph(adf.text(decision.question or "Could you clarify?")),
+        )
+
+    @staticmethod
+    def _not_confirmed_body(context) -> dict:
+        from app.domain import adf
+
+        return adf.doc(
+            adf.paragraph(
+                adf.mention(context.tenant.pm_account_id),
+                adf.text(
+                    " understood — I won't apply that. Tell me what you'd like changed instead. "
+                    "The Section / Issue / Suggested change format is easiest for me, but plain "
+                    "language is fine too — I'll restate it and check with you before editing."
+                ),
+            ),
         )
 
     def _llm_metadata(self, state: PrdState, role: str) -> CallMetadata:

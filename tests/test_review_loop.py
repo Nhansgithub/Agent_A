@@ -34,9 +34,11 @@ STRUCTURED = "Section: Intro\nIssue: unclear\nSuggested change: add an example"
 class FakeAuthor:
     def __init__(self) -> None:
         self.revise_calls = 0
+        self.revised_with = ""
 
     async def revise(self, *, current_markdown, structured_feedback, metadata) -> Draft:
         self.revise_calls += 1
+        self.revised_with = structured_feedback
         return Draft(
             title="Widget Guide", markdown="# Widget Guide\n\nRevised.", self_critique_applied=False
         )
@@ -184,6 +186,47 @@ async def test_confirming_the_restatement_then_applies_it() -> None:
     assert context.interpret_calls == [True], "the interpreter was told a reply was awaited"
 
 
+async def test_confirming_applies_the_stored_feedback_even_if_the_decision_omits_it() -> None:
+    """Production reality: the interpreter returns CONFIRMATION with EMPTY structured_feedback for a
+    bare 'yes'. The orchestrator must fall back to the stored restatement, not revise on nothing."""
+    orchestrator, repository, context = build(
+        FeedbackDecision(
+            route=FeedbackRoute.CONFIRMATION, confirmed=True
+        ),  # no structured_feedback
+        stage=Stage.AWAITING_STRUCTURE_CONFIRM,
+        pending_feedback=STRUCTURED,
+    )
+
+    await orchestrator.apply_pm_comment("page-1", comment_text="yes")
+
+    assert context.author.revise_calls == 1
+    assert STRUCTURED in context.author.revised_with, "applied the stored restatement, not nothing"
+
+
+async def test_a_bare_no_asks_what_to_change_instead_of_silently_dead_ending() -> None:
+    """FR-10: a rejection must open a dialogue, not vanish. Previously this posted nothing and the PM
+    was left with no signal they needed to re-explain."""
+    from app.domain import adf
+
+    orchestrator, repository, context = build(
+        FeedbackDecision(route=FeedbackRoute.CONFIRMATION, confirmed=False),
+        stage=Stage.AWAITING_STRUCTURE_CONFIRM,
+        pending_feedback=STRUCTURED,
+    )
+
+    result = await orchestrator.apply_pm_comment("page-1", comment_text="no")
+
+    assert result.final_stage is Stage.AWAITING_REVIEW, "back to open review for another round"
+    assert context.comments, "the agent must acknowledge the 'no', not go silent"
+    text = adf.extract_text(context.comments[-1][1]).lower()
+    assert "what you'd like changed" in text or "changed instead" in text
+    assert "mention" in str(context.comments[-1][1]), (
+        "must @-mention the PM, or they aren't notified"
+    )
+    # The rejected restatement must not linger as pending feedback.
+    assert repository.state.require("page-1").pending_feedback is None
+
+
 # ---------------------------------------------------------------------------------------------
 # Story 4.5 — bounded clarification: ask only on a trigger, block on the answer (EH-08).
 # ---------------------------------------------------------------------------------------------
@@ -300,3 +343,106 @@ async def test_interpreter_rejects_a_clarify_without_a_trigger() -> None:
                 correlation_id="c", prd_id="page-1", agent_role="feedback_interpreter"
             ),
         )
+
+
+# ---------------------------------------------------------------------------------------------
+# FR-10 (amendment 2026-07-25) — the interpreter reasons with conversation memory.
+# ---------------------------------------------------------------------------------------------
+
+
+async def test_interpreter_prompt_carries_the_transcript_and_the_restatement() -> None:
+    """The model must SEE the discussion and the restatement it's confirming — otherwise a reply like
+    'yes but drop the last point' has no anchor. Assert both reach the prompt."""
+    from app.agents.llm import LlmClient
+    from app.domain.feedback import ReviewTurn, Speaker
+    from tests.test_llm_client import FakeAnthropic
+
+    fake = FakeAnthropic(text='{"route": "confirmation", "confirmed": true}')
+    interpreter = FeedbackInterpreter(LlmClient("k", client=fake), model="m")
+
+    await interpreter.interpret(
+        comment_text="yes but drop the last point",
+        awaiting_reply=True,
+        draft_markdown="# Guide",
+        prd_markdown="# PRD",
+        conversation=(
+            ReviewTurn(Speaker.PM, "the intro is too long"),
+            ReviewTurn(Speaker.AGENT, "I curated it like this — is this what you mean?"),
+            ReviewTurn(Speaker.PM, "yes but drop the last point"),
+        ),
+        pending_restatement="Section: Intro\nIssue: too long\nSuggested change: trim it",
+        metadata=CallMetadata(
+            correlation_id="c", prd_id="page-1", agent_role="feedback_interpreter"
+        ),
+    )
+
+    prompt = fake.calls[-1]["messages"][0]["content"]
+    assert "PM: the intro is too long" in prompt, "the transcript must reach the model"
+    assert "Agent: I curated it" in prompt, "the agent's own turn must be labelled"
+    assert "Section: Intro" in prompt, "the restatement being confirmed must be shown"
+
+
+async def test_run_context_labels_the_agents_own_turns_and_the_pms() -> None:
+    """The transcript must distinguish who said what, by AD-10 account — not guesswork."""
+    from app.domain.atlassian import JiraComment
+    from app.domain.feedback import Speaker
+    from app.orchestrator.context import RunContext
+
+    class FakeTickets:
+        async def discussion(self, issue_key, *, limit=30):
+            return [
+                JiraComment(id="1", author_account_id="acct-pm", body_text="fix the intro"),
+                JiraComment(id="2", author_account_id="agent-acct", body_text="is this right?"),
+            ]
+
+    ctx = RunContext(
+        prd_id="page-1",
+        correlation_id="c",
+        tenant=TENANT,
+        confluence_base_url="https://x",
+        repository=None,
+        confluence=None,
+        detection=None,
+        classifier=None,
+        author=None,
+        feedback_interpreter=None,
+        publisher=None,
+        ticket_manager=FakeTickets(),
+        identity=None,
+        agent_account_cache={TENANT.project_id: "agent-acct"},
+    )
+
+    turns = await ctx._review_conversation("TESTREV-1")
+
+    assert [(t.speaker, t.text) for t in turns] == [
+        (Speaker.PM, "fix the intro"),
+        (Speaker.AGENT, "is this right?"),
+    ]
+
+
+async def test_run_context_transcript_degrades_to_empty_on_a_read_failure() -> None:
+    """A transcript is an enhancement — a Jira hiccup must not fail the whole feedback round."""
+    from app.orchestrator.context import RunContext
+
+    class BrokenTickets:
+        async def discussion(self, issue_key, *, limit=30):
+            raise RuntimeError("jira down")
+
+    ctx = RunContext(
+        prd_id="page-1",
+        correlation_id="c",
+        tenant=TENANT,
+        confluence_base_url="https://x",
+        repository=None,
+        confluence=None,
+        detection=None,
+        classifier=None,
+        author=None,
+        feedback_interpreter=None,
+        publisher=None,
+        ticket_manager=BrokenTickets(),
+        identity=None,
+        agent_account_cache={},
+    )
+
+    assert await ctx._review_conversation("TESTREV-1") == ()
