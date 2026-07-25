@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pre-push gate — runs the exact checks CI runs (ruff lint + format, import-linter, pytest), so a
+# red build can never leave your machine. Mirrors the `test` job in .github/workflows/ci.yml.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks      (or: make hooks)
+#
+# Bypass in a genuine emergency with `git push --no-verify` — but then CI is your only net.
+set -euo pipefail
+
+# Prefer the project venv; fall back to whatever is on PATH so a fresh clone still gets a check.
+if [ -x ".venv/bin/python" ]; then
+    RUFF=".venv/bin/ruff"; PY=".venv/bin/python"; LINT=".venv/bin/lint-imports"
+else
+    RUFF="ruff"; PY="python3"; LINT="lint-imports"
+fi
+
+echo "pre-push ▸ ruff check"
+"$RUFF" check .
+echo "pre-push ▸ ruff format --check"
+"$RUFF" format --check .
+echo "pre-push ▸ import-linter (architecture contracts)"
+"$LINT"
+echo "pre-push ▸ pytest (offline suite)"
+"$PY" -m pytest -q
+
+echo "pre-push ▸ all gates green — pushing"

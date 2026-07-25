@@ -29,12 +29,15 @@ Tagging is optional now — `v*` tags still build and give you an immutable tag 
 
 ## 1. Build off the box and push
 
-**Recommended: let GitHub Actions do it.** `.github/workflows/build-image.yml` already builds this
-image and pushes it to GHCR, which satisfies AD-21's off-box rule without Docker on your laptop.
-Push the repo to GitHub, then either push a `v*` tag or run the workflow manually:
+**Recommended: let GitHub Actions do it.** The `CI` workflow (`.github/workflows/ci.yml`) builds this
+image and pushes it to GHCR — but only in its `build` job, which runs **after** the `test` job passes
+(`needs: test`) and only on `master` or a `v*` tag. So a red gate never produces a deployable image,
+and the off-box rule (AD-21) is satisfied without Docker on your laptop. Just push to `master`, or push
+a release tag / run the workflow manually:
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0     # or: Actions -> build-image -> Run workflow
+git push origin master                        # master build → :latest + :sha-<short>
+git tag v0.1.0 && git push origin v0.1.0       # or: Actions → CI → Run workflow
 ```
 
 The image lands at **`ghcr.io/nhansgithub/agent_a`** (`:latest` and `:<tag>`). GHCR requires the

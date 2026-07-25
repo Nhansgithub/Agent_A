@@ -1,14 +1,22 @@
-# CI — run the offline test suite + the architecture and licensing gates on every push.
+# CI + image build — one pipeline so a red gate can NEVER produce a deployable image.
 #
-# This is the fast gate. The image build (build-image.yml) is separate so the demo's "build off the
-# box" rule (AD-21) is satisfied by CI, not by the 1 GB Droplet.
+# `test` runs on every push and PR: the fast offline gate — ruff lint + format check, the
+# architecture/licensing contracts, and the no-network test suite.
+#
+# `build` runs ONLY after `test` passes (`needs: test`) and ONLY on master or a `v*` tag. That
+# dependency is the whole point: the image the Droplet pulls is always built from green code. A
+# feature branch or PR runs the tests but never builds an image.
+#
+# The image is built on the GitHub runner, never on the 1 GB Droplet (AD-21) — the box only pulls.
 
 name: CI
 
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -41,3 +49,45 @@ jobs:
           exit $status
       # The classifier holdout eval (AD-17, Story 2.4) is NOT run here — it needs the Anthropic key.
       # Run it in a gated job with the secret, or manually: scripts/run_classifier_eval.py
+
+  build:
+    # The gate: build only from code that passed `test`, and only on master or a release tag —
+    # never on a feature branch or PR. A red `test` job leaves `build` skipped, so no image ships.
+    # Build the Docker image OFF the 1 GB box and push it (AD-21, Story 6.4): the Droplet only PULLS.
+    needs: test
+    if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))) || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # A Docker repository name must be lowercase, but `github.repository` preserves the owner/repo
+      # casing as typed on GitHub (e.g. Nhansgithub/Agent_A) — using it raw fails the build with
+      # "repository name must be lowercase".
+      - name: Lowercase the image name
+        id: image
+        run: |
+          echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          # Second, immutable tag. A release tag keeps its own name; a branch build is identified by
+          # commit, because tagging every master build ":master" would give you a moving label with
+          # nothing to roll back to.
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=sha-$(echo '${{ github.sha }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.name }}:latest,${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}

@@ -118,7 +118,6 @@ def test_swapping_a_reviewer_is_a_single_config_field() -> None:
         "deploy/reconcile.cron",
         "deploy/README.md",
         ".github/workflows/ci.yml",
-        ".github/workflows/build-image.yml",
     ],
 )
 def test_deploy_artifact_exists(artifact: str) -> None:
@@ -162,9 +161,15 @@ def test_reconcile_cron_hits_the_localhost_admin_endpoint() -> None:
 
 def test_build_workflow_builds_off_the_box() -> None:
     """AD-21 — the image is built in CI, never on the 1 GB Droplet."""
-    workflow = (PROJECT_ROOT / ".github" / "workflows" / "build-image.yml").read_text()
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text()
     assert "docker/build-push-action" in workflow
     assert "deploy/Dockerfile" in workflow
+
+
+def test_the_image_build_is_gated_on_the_test_job() -> None:
+    """A red gate must never ship an image: the build job depends on `test` passing (D-34)."""
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert "needs: test" in workflow, "the build job must depend on the test job"
 
 
 def test_a_restriction_403_names_the_plan_tier_not_the_permissions() -> None:

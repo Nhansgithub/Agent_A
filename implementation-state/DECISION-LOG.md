@@ -508,3 +508,33 @@ test asserts `extra_labels` reach the create payload. Suite 496 passing, ruff cl
 **Revisit if:** a tenant's Jira workflow makes the `agent-generated` label meaningful (e.g. an
 automation rule keys on it) and it needs to be Jira-specific, or FR-13 is amended to genuinely require
 a specific Reporter.
+
+### D-34 · CI gates the image build; a pre-push hook mirrors CI locally  (2026-07-25, Nhan's request)
+**Context:** A master push (9e483a3) deployed successfully **while CI was red**. Two gaps caused it:
+(1) the image build lived in a *separate* workflow (`build-image.yml`) that ran on every master push
+with **no dependency** on the `test` workflow — so a red `ci.yml` never blocked a deployable image;
+(2) locally only `ruff check` had been run, not `ruff format --check`, and CI runs both — so the
+format break wasn't caught before push. The deployed code was functionally correct (the failure was a
+one-line test-name wrap), but "green before shipping" was a habit, not a guarantee.
+**Decision:** make it structural, two parts.
+- **Gate the build on the tests.** Merged the image build into `ci.yml` as a `build` job with
+  `needs: test` and an `if` ref guard (master or `v*` tag, plus manual dispatch); deleted
+  `build-image.yml`. A red `test` job now leaves `build` skipped — no image ships. Still built on the
+  GitHub runner, never the 1 GB box (AD-21). Encoded as a test: `test_operations.py` asserts
+  `needs: test` is present and that the build steps live in `ci.yml`.
+- **Mirror CI locally.** Committed `.githooks/pre-push` (enabled with `git config core.hooksPath
+  .githooks`, or `make hooks`) and a `Makefile` with `check` / `lint` / `test` / `format`, both
+  running the exact four CI gates — `ruff check`, `ruff format --check`, `lint-imports`, `pytest`.
+  `git push --no-verify` is the documented emergency bypass.
+**Rationale:** one source of truth for the build steps (no duplication to drift), and the gate is now
+a property of the pipeline rather than of whoever pushed. The hook stops the specific failure that
+occurred (a format-only miss) plus any contract/test break, before it leaves the machine.
+**Alternatives rejected:** a `workflow_run` trigger keeping the two files separate — it re-checks out
+the *default branch* head, not the commit under test, so the build/version-tag SHA can silently drift,
+and it needs an explicit `conclusion == success` guard; a single workflow with `needs` uses the
+correct commit SHA and is simpler. Also rejected: copying the ruff/pytest steps into `build-image.yml`
+(two sources of truth). **Note:** the hook proved itself while being introduced — `make check` caught
+a Make built-in `LINT` variable collision *and* the `test_operations.py` assertions on the removed
+`build-image.yml`, before either reached CI.
+**Revisit if:** the image must build on non-master branches, or the offline suite grows slow enough
+that a full pre-push run is painful (then scope the hook to a fast subset and keep the full run in CI).

@@ -692,3 +692,35 @@ agent-authored so the team knows the flow created them?
 **Tests:** 492 → 496. New: all-four-tickets-labelled; Publishing assigns HoP with no reporter; Review
 assigns PM with no reporter; adapter carries `extra_labels` into the payload. The fake `create_issue`
 now captures assignee/reporter/labels. Suite green, ruff clean, 5/5 contracts. Recorded as **D-33**.
+
+---
+
+## Session 3 (cont.) — 2026-07-25 · CI red but deployed anyway → pipeline hardening (D-34)
+
+**Reported:** Nhan saw the `test` workflow red on GitHub while the change had already deployed, and
+asked whether a workaround had shipped and whether things were clean.
+
+**What happened.** The D-33 push (9e483a3) failed CI on **`ruff format --check`** — an over-long test
+function name. Locally only `ruff check` had been run, not `ruff format --check` (CI runs both). It
+was **not** a functional failure (496 passed locally) and **not** a workaround — but the deploy
+succeeded despite red CI because `build-image.yml` built the image **independently** of `ci.yml`, with
+no dependency. Two gaps: a red gate could still ship, and the format check wasn't in the local loop.
+
+**Fixed the immediate red (b62288e):** shortened the test name; verified all four CI steps locally;
+redeployed the Droplet to `sha-b62288e` so deployed == green HEAD (app code was byte-identical).
+
+**Then hardened the pipeline (D-34), per Nhan's request:**
+1. **Build gated on tests.** Merged the image build into `ci.yml` as a `build` job with `needs: test`
+   + a ref guard (master / `v*` tag / manual dispatch); deleted `build-image.yml`. A red `test` now
+   leaves `build` skipped — no image ships. Still off-box (AD-21). Asserted in `test_operations.py`
+   (`needs: test` present; build steps in `ci.yml`).
+2. **Local mirror of CI.** Committed `.githooks/pre-push` (enable: `git config core.hooksPath
+   .githooks` or `make hooks`) + a `Makefile` (`check`/`lint`/`test`/`format`) running the exact four
+   gates. `--no-verify` is the documented bypass. `core.hooksPath` set locally this session.
+
+**The net proved itself while being built:** `make check` caught (a) a Make built-in `LINT` variable
+collision and (b) `test_operations.py` still asserting the removed `build-image.yml` — both before CI.
+Also updated `deploy/README.md` to the new build path.
+
+**Tests:** 496 → 496 (net: −`build-image.yml` artifact test, +`needs: test` gate test). Suite green,
+ruff clean (incl. `ruff format --check`), 5/5 contracts. Recorded as **D-34**.
