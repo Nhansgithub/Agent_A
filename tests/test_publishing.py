@@ -151,7 +151,7 @@ class FakeTickets:
     comments: list[str] = field(default_factory=list)
     marker_hit: JiraIssue | None = None
 
-    async def find_ticket_by_marker(self, project_key, prd_id):
+    async def find_ticket_by_marker(self, project_key, prd_id, *, summary_prefix=None):
         return self.marker_hit
 
     async def create_publishing_ticket(self, *, tenant, prd_id, userdoc_title, draft_page_url):

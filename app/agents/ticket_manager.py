@@ -30,6 +30,13 @@ from app.domain.errors import AgentError
 #: Ticket types the agent must NEVER auto-transition — those move by a human (AD-15).
 _HUMAN_GATE = frozenset({"review", "publishing"})
 
+#: Summary prefixes — the literal start of each `create_*` summary. Two ticket types can share the
+#: `prd-<id>` marker in one project (a rename request + a Review ticket in the Review project; a
+#: tracking + a Publishing ticket in Main), so a marker search must be told which *type* it wants.
+#: Defined once and reused by both the creator and the finder so the two can never drift apart.
+REVIEW_TICKET_SUMMARY_PREFIX = "Review UserDoc:"
+PUBLISHING_TICKET_SUMMARY_PREFIX = "Approve & publish UserDoc:"
+
 _MAX_TRANSITION_HOPS = 6  # a sane ceiling on the configured path; also stops any cyclic workflow
 
 
@@ -270,7 +277,7 @@ class TicketManager:
         """
         return await self._jira.create_issue(
             project_key=tenant.jira_review_project_key,
-            summary=f"Review UserDoc: {userdoc_title}",
+            summary=f"{REVIEW_TICKET_SUMMARY_PREFIX} {userdoc_title}",
             description=self._review_description(userdoc_title, draft_page_url),
             issue_type="Task",
             assignee_account_id=tenant.pm_account_id,
@@ -286,7 +293,7 @@ class TicketManager:
         """
         return await self._jira.create_issue(
             project_key=tenant.jira_main_project_key,
-            summary=f"Approve & publish UserDoc: {userdoc_title}",
+            summary=f"{PUBLISHING_TICKET_SUMMARY_PREFIX} {userdoc_title}",
             description=self._publishing_description(userdoc_title, draft_page_url),
             issue_type="Task",
             assignee_account_id=tenant.head_of_product_account_id,
@@ -294,9 +301,19 @@ class TicketManager:
             prd_id=prd_id,
         )
 
-    async def find_ticket_by_marker(self, project_key: str, prd_id: str) -> JiraIssue | None:
-        """Adopt-orphan helper for the Review/Publishing tickets (AD-11)."""
-        return await self._jira.find_issue_by_prd_marker(project_key, prd_id)
+    async def find_ticket_by_marker(
+        self, project_key: str, prd_id: str, *, summary_prefix: str | None = None
+    ) -> JiraIssue | None:
+        """Adopt-orphan helper for the Review/Publishing tickets (AD-11).
+
+        Pass the ticket type's summary prefix (`REVIEW_TICKET_SUMMARY_PREFIX` /
+        `PUBLISHING_TICKET_SUMMARY_PREFIX`) so the search does not adopt a *different* agent ticket
+        that happens to share the marker in the same project (e.g. the FR-02a rename request in the
+        Review project).
+        """
+        return await self._jira.find_issue_by_prd_marker(
+            project_key, prd_id, summary_prefix=summary_prefix
+        )
 
     async def comment(self, issue_key: str, body: dict) -> str:
         """Post an ADF comment (FR-07, FR-11, FR-13). Body must be an ADF document."""

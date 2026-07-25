@@ -56,7 +56,8 @@ class FakeTickets:
         self.comments: list[tuple[str, dict]] = []
         self.marker_hit: JiraIssue | None = None
 
-    async def find_ticket_by_marker(self, project_key, prd_id):
+    async def find_ticket_by_marker(self, project_key, prd_id, *, summary_prefix=None):
+        self.marker_prefix = summary_prefix
         return self.marker_hit
 
     async def create_review_ticket(self, *, tenant, prd_id, userdoc_title, draft_page_url):
@@ -167,3 +168,25 @@ async def test_a_rerun_with_recorded_ids_adopts_rather_than_duplicates() -> None
     assert context.ticket_manager.review_created == 0, "did not create a second Review ticket"
     final = repository.state.require("page-1")
     assert final.review_ticket_key == "TESTREV-existing"
+
+
+async def test_after_a_rename_detour_a_real_review_ticket_is_created() -> None:
+    """The reported bug: after a wrong-name → rename → correct-name detour, the draft was created but
+    NO Review ticket was — the drafting step adopted the rename request (same project + marker) as the
+    Review ticket. The typed marker search must skip the rename ticket and create a Review ticket."""
+    from app.agents.ticket_manager import REVIEW_TICKET_SUMMARY_PREFIX
+
+    # The run carries the rename ticket key (the detour happened) but no review ticket yet.
+    orchestrator, repository, context = build(rename_request_ticket_key="TESTREV-rename")
+    # The ticket manager's typed search for a *Review* ticket finds none (only the rename exists).
+    context.ticket_manager.marker_hit = None
+
+    await orchestrator.advance("page-1")
+
+    assert context.ticket_manager.review_created == 1, "a real Review ticket must be created"
+    assert context.ticket_manager.marker_prefix == REVIEW_TICKET_SUMMARY_PREFIX, (
+        "the drafting step must search for the Review type, not any marked ticket"
+    )
+    final = repository.state.require("page-1")
+    assert final.review_ticket_key == "TESTREV-1"
+    assert final.review_ticket_key != final.rename_request_ticket_key, "not the rename ticket"

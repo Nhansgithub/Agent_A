@@ -447,3 +447,27 @@ not-confirmed branch **post an acknowledgment** ("what would you like changed in
 the PM) and clear the stale restatement before returning to review — no silent dead-end, no crash.
 **Found by:** writing the test that should always have existed. The "no" path had **zero** end-to-end
 coverage, which is exactly why a broken state edge shipped. Now covered.
+
+### D-32 · Marker search is type-aware — a rename detour no longer eats the Review ticket  (2026-07-25, Nhan's bug report)
+**Context:** a PRD uploaded with the wrong name files an FR-02a **rename request** in the Review
+project (marker `prd-<id>`). After the PM renames the page, drafting runs and calls
+`find_ticket_by_marker(review_project, prd_id)` to adopt-or-create the Review ticket (AD-11). But that
+search was `ORDER BY created ASC LIMIT 1` — it returned the **oldest** marked ticket, which is the
+rename request. So the run adopted the rename ticket as its "Review ticket" and **never created a real
+one**: the draft existed, but there was no draft-review ticket (exactly the reported symptom). Two
+ticket types share the marker in one project (rename + Review in Review; tracking + Publishing in
+Main); only the publishing handler had a guard (an inline `startswith("approve & publish")` on
+limit=1, which had the same latent duplicate risk).
+**Decision:** `find_issue_by_prd_marker` gains an optional `summary_prefix`. When given, it scans a
+bounded oldest-first set and returns the first ticket of that **type**. Summary prefixes are module
+constants in `ticket_manager` (`REVIEW_TICKET_SUMMARY_PREFIX`, `PUBLISHING_TICKET_SUMMARY_PREFIX`),
+used by both the `create_*` summary and the finder so they cannot drift. `on_drafted` searches for the
+Review type; `on_passed` for the Publishing type (replacing the fragile inline check). The tracking
+search stays untyped — it runs before any sibling type exists, so "oldest" is correct.
+**Why not a per-type label:** AD-4 forbids new cross-tenant label constants (`agent-generated` is the
+only allowed one). The summary prefix is agent-authored English, not a config literal, so it is
+AD-4-clean — and it is the pattern already in the codebase.
+**Robustness:** filtering within a bounded set (not limit=1) means it adopts a genuine Review orphan
+if one exists **and** skips the rename ticket — so no duplicate and no mis-adoption. Covered by
+adapter tests (typed skip + none-when-only-other-type) and an end-to-end handler test
+(after-rename → Review ticket created).

@@ -76,18 +76,32 @@ class JiraAdapter:
         )
         return [self._to_issue(issue) for issue in (body or {}).get("issues", [])]
 
-    async def find_issue_by_prd_marker(self, project_key: str, prd_id: str) -> JiraIssue | None:
+    async def find_issue_by_prd_marker(
+        self, project_key: str, prd_id: str, *, summary_prefix: str | None = None
+    ) -> JiraIssue | None:
         """Find a ticket this run already created, by its AD-11 correlation label.
 
         This is the *adopt an orphan* half of idempotent-create replay: a create can succeed remotely
         a beat before its id is persisted, and on replay the id looks absent. Searching for the marker
         finds that orphan instead of creating a second ticket.
+
+        `summary_prefix` disambiguates when **several ticket types share the marker in one project** —
+        a rename-request and a Review ticket both live in the Review project (FR-02a / FR-06), and a
+        tracking and a Publishing ticket both live in Main (FR-04 / FR-13). Without it the search
+        returns the *oldest* marked ticket, which after a rename detour is the rename request — so the
+        drafting step would adopt that as the Review ticket and never create a real one. With it, the
+        search scans a bounded, oldest-first set and returns the first ticket of the requested **type**,
+        so it adopts a genuine orphan of that type if one exists but never mistakes another type for it.
         """
         label = prd_marker_label(prd_id)
+        limit = 1 if summary_prefix is None else 25
         issues = await self.search_issues(
-            f'project = "{project_key}" AND labels = "{label}" ORDER BY created ASC', limit=1
+            f'project = "{project_key}" AND labels = "{label}" ORDER BY created ASC', limit=limit
         )
-        return issues[0] if issues else None
+        if summary_prefix is None:
+            return issues[0] if issues else None
+        prefix = summary_prefix.strip().lower()
+        return next((i for i in issues if i.summary.strip().lower().startswith(prefix)), None)
 
     async def get_transitions(self, issue_key: str) -> list[JiraTransition]:
         """The transitions legal from the issue's **current** status (AD-13 step 3)."""

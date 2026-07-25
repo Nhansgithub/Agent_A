@@ -642,3 +642,22 @@ solution-design review-loop + state diagram — all marked "amendment 2026-07-25
 **Tests:** 484 → 489. New: interpreter-carries-transcript, RunContext PM/agent labelling, transcript
 degrades on failure, empty-`structured_feedback` fallback, bare-"no" acknowledgment + legal edge.
 Suite green, ruff clean, 5/5 contracts.
+
+---
+
+## Session 3 (cont.) — 2026-07-25 · Rename detour ate the Review ticket (D-32)
+
+**Reported:** wrong-name PRD → rename request filed → PM renames → draft created but **no
+draft-review ticket**, unlike a correct first upload.
+
+**Root cause:** the rename request and the Review ticket both live in the Review project with the same
+`prd-<id>` marker. `find_issue_by_prd_marker` returned the oldest (`ORDER BY created ASC LIMIT 1`) =
+the rename ticket, so drafting adopted it as the Review ticket and never created a real one. The
+publishing handler had a guard against the analogous tracking/publishing collision; drafting did not.
+
+**Fix:** type-aware marker search (`summary_prefix`), filtering within a bounded set so it adopts a
+real orphan of the right type but never mistakes another type for it. Both handlers routed through it;
+the fragile inline `startswith` check in publishing removed. AD-4-clean (summary text, not a label).
+
+**Tests:** 489 → 492. New: adapter typed-skip + none-when-only-other-type; handler
+after-rename-creates-Review. Suite green, ruff clean, 5/5 contracts.

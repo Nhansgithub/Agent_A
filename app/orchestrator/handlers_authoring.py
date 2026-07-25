@@ -27,7 +27,7 @@ from app.agents.author.agent import AuthorAgent
 from app.agents.llm import CallMetadata
 from app.agents.publisher import Publisher
 from app.agents.review_request import build_review_request
-from app.agents.ticket_manager import TicketManager
+from app.agents.ticket_manager import REVIEW_TICKET_SUMMARY_PREFIX, TicketManager
 from app.config.schema import TenantConfig
 from app.domain.stage import PendingGate, Stage
 from app.domain.state import PrdState
@@ -80,8 +80,14 @@ class AuthoringHandlers:
         #    correlation marker so a crash after create-before-persist does not duplicate it (AD-11).
         review_ticket_key = state.review_ticket_key
         if review_ticket_key is None:
+            # Adopt only a *Review* ticket. The FR-02a rename request lives in the same project with
+            # the same marker and is older, so an untyped search would return it — leaving the run
+            # with the rename ticket as its "Review ticket" and no real one ever created (the bug this
+            # fixes). The typed search skips it and creates the Review ticket.
             orphan = await context.ticket_manager.find_ticket_by_marker(
-                context.tenant.jira_review_project_key, context.prd_id
+                context.tenant.jira_review_project_key,
+                context.prd_id,
+                summary_prefix=REVIEW_TICKET_SUMMARY_PREFIX,
             )
             ticket = orphan or await context.ticket_manager.create_review_ticket(
                 tenant=context.tenant,

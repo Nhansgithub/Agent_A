@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.agents.publisher import Publisher
-from app.agents.ticket_manager import TicketManager
+from app.agents.ticket_manager import PUBLISHING_TICKET_SUMMARY_PREFIX, TicketManager
 from app.config.schema import TenantConfig
 from app.domain import adf
 from app.domain.stage import PendingGate, Stage
@@ -66,21 +66,20 @@ class PublishingHandlers:
             )
 
         # Create (or adopt) the Publishing ticket for the Head of Product (FR-13 step 2, AD-11).
+        # The tracking ticket shares the marker in this same Main project and is older, so the search
+        # must be typed to the Publishing ticket — otherwise it adopts the tracking ticket.
         publishing_key = state.publishing_ticket_key
         if publishing_key is None:
             orphan = await context.ticket_manager.find_ticket_by_marker(
-                context.tenant.jira_main_project_key, context.prd_id
+                context.tenant.jira_main_project_key,
+                context.prd_id,
+                summary_prefix=PUBLISHING_TICKET_SUMMARY_PREFIX,
             )
-            # An orphan by marker could also be the tracking ticket; only adopt a *publishing* one.
-            ticket = (
-                orphan
-                if orphan is not None and orphan.summary.lower().startswith("approve & publish")
-                else await context.ticket_manager.create_publishing_ticket(
-                    tenant=context.tenant,
-                    prd_id=context.prd_id,
-                    userdoc_title=state.prd_title or "UserDoc",
-                    draft_page_url=page_url,
-                )
+            ticket = orphan or await context.ticket_manager.create_publishing_ticket(
+                tenant=context.tenant,
+                prd_id=context.prd_id,
+                userdoc_title=state.prd_title or "UserDoc",
+                draft_page_url=page_url,
             )
             publishing_key = ticket.key
 

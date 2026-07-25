@@ -52,12 +52,16 @@ def json_response(status: int, payload: object) -> httpx.Response:
 
 
 def issue_payload(
-    *, key: str = "MAIN-1", category: str = "new", labels: list[str] | None = None
+    *,
+    key: str = "MAIN-1",
+    category: str = "new",
+    labels: list[str] | None = None,
+    summary: str = "Track the PRD",
 ) -> dict:
     return {
         "key": key,
         "fields": {
-            "summary": "Track the PRD",
+            "summary": summary,
             "status": {"name": "To Do", "statusCategory": {"key": category}},
             "assignee": {"accountId": "acct-pm-1"},
             "reporter": {"accountId": "acct-admin-1"},
@@ -237,6 +241,60 @@ async def test_find_issue_by_prd_marker_adopts_an_orphan() -> None:
 async def test_find_issue_by_prd_marker_returns_none_when_there_is_no_orphan() -> None:
     adapter, _ = build(json_response(200, {"issues": []}))
     assert await adapter.find_issue_by_prd_marker("MAIN", "page-123") is None
+
+
+async def test_marker_search_with_a_type_skips_a_different_ticket_that_shares_the_marker() -> None:
+    """After a rename detour the Review project holds a rename request AND (eventually) a Review
+    ticket, both marked. Untyped search returns the older rename request; the typed search must skip
+    it — this is the bug where the drafting step adopted the rename ticket as the Review ticket."""
+    adapter, _ = build(
+        json_response(
+            200,
+            {
+                "issues": [
+                    # oldest first — the rename request was created before drafting
+                    issue_payload(
+                        key="REV-1",
+                        labels=["prd-page-123"],
+                        summary="Please confirm & rename PRD page: X",
+                    ),
+                    issue_payload(
+                        key="REV-2", labels=["prd-page-123"], summary="Review UserDoc: X"
+                    ),
+                ]
+            },
+        )
+    )
+
+    found = await adapter.find_issue_by_prd_marker(
+        "REV", "page-123", summary_prefix="Review UserDoc:"
+    )
+
+    assert found is not None and found.key == "REV-2", "adopt the Review ticket, not the rename one"
+
+
+async def test_typed_marker_search_returns_none_when_only_the_other_type_exists() -> None:
+    """Only the rename request exists → no Review ticket to adopt → the caller must create one."""
+    adapter, _ = build(
+        json_response(
+            200,
+            {
+                "issues": [
+                    issue_payload(
+                        key="REV-1",
+                        labels=["prd-page-123"],
+                        summary="Please confirm & rename PRD page: X",
+                    )
+                ]
+            },
+        )
+    )
+
+    found = await adapter.find_issue_by_prd_marker(
+        "REV", "page-123", summary_prefix="Review UserDoc:"
+    )
+
+    assert found is None, "the rename request must not be mistaken for a Review ticket"
 
 
 async def test_search_does_not_assume_a_fixed_ticket_location() -> None:
