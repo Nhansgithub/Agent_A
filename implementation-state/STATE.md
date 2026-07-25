@@ -89,19 +89,21 @@ The D-16 self-ingestion guard was observed working live in the same run:
 `webhook dropped: dropped_duplicate (project_alpha:jira.comment_created:10014 was already admitted)`
 — the agent's own review-request comment echoing back and being refused.
 
-### ▶ Next Action — walk the two gates on UDR-2
+### ▶ Current finding (2026-07-25 readiness check)
 
-This run is **live on the Droplet**, not the Mac. Do it in the Atlassian UI; there is nothing to run
-locally, and `run_local_demo.py` must NOT be used (it drives the Mac's separate database).
+The webhook-driven run (`final_PRD_Cold Brew Scheduler`, page 1474778) went all the way to the publish
+transaction and then **errored** — `last_good_checkpoint = publishing`, ticket AMS-14. Both gates were
+walked (UDR-2 and AMS-14 are Done), the edit restriction was correctly **skipped** (Free-tier, D-21),
+but `move_page` returned 404: **the draft page 1474798 was trashed by a human between the two gates**
+(`status: trashed`; all three folders are healthy). The system behaved correctly — errored, preserved
+the checkpoint, parked for admin resume (EH-01/AD-19). It cannot self-heal: the page it must publish
+is in the trash.
 
-1. **PM:** open **UDR-2**, optionally leave feedback in the `Section: / Issue: / Suggested change:`
-   format (a revise round will run by itself), then move it to **Done**.
-2. **Head of Product:** the Publishing ticket appears in AMS; move it to **Done**.
-3. Watch it in `journalctl`/`docker logs agent` on the Droplet, and in LangSmith for per-step
-   latency/cost — that is the PRD §12 Definition of Done.
-
-Step 2 also exercises D-28 live: publishing moves the draft into the published folder, which fires a
-page event for the agent's own page that must be refused at admission.
+**Consequence for readiness:** the publish transaction has completed to `complete` **locally** (the
+Quick Notes run) but has **never reached `complete` on the Droplet**. The production last mile
+(publishing → move → export → complete over the webhook path) is still unproven. Recommended close:
+clear this dead run, create one fresh `final_PRD_*` page, and walk both gates **without touching the
+draft**.
 
 ### Known gaps, deliberate
 
