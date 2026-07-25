@@ -538,3 +538,53 @@ a Make built-in `LINT` variable collision *and* the `test_operations.py` asserti
 `build-image.yml`, before either reached CI.
 **Revisit if:** the image must build on non-master branches, or the offline suite grows slow enough
 that a full pre-push run is painful (then scope the hook to a fast subset and keep the full run in CI).
+
+### D-35 · Rename-churn guard + source-folder admission gate (FR-01a / AD-24)  (2026-07-25, Nhan's request + audit)
+**Context:** Nhan worried the agent would re-catch an already-drafted PRD and spawn duplicate tickets/
+drafts as its source page name was toggled back and forth. A page id is stable across renames, and
+each rename bumps the Confluence version → a new AD-9 key, so version-dedup alone doesn't stop it.
+The deep audit also found (a) a page created anywhere in the space was admitted then left a dead
+`detected` row, and (b) the EH-04 re-entry recorded its dedupe key BEFORE the advance, so a crash
+mid-advance stranded the run behind a committed-but-unworked key (`detected` isn't liveness-watched).
+**Decision:** in `_dispatch_page`: an existing run's source-page event is actionable **only** while
+`pending_gate == UPLOADING_PM_RENAME` (the FR-02a/EH-07 waits), dropped otherwise **before** the
+version GET; a new page is admitted only if `_in_source_folder` (container or ancestors); and the
+re-entry dedupe key is recorded **after** `advance`, not before, so a crash lets the redelivery
+re-advance (idempotent) instead of stranding the run.
+**Rationale:** the only time re-processing a source page matters is the rename/reject correction,
+which is exactly the `UPLOADING_PM_RENAME` wait. Everything past detection took the PRD from its
+finalized version; re-drafting on a source edit is out of scope. Cheap (no GET for the churn case).
+**Alternatives rejected:** dedup by content hash (heavier, and the version already changes); pruning
+dead rows after detection (a delete path the store doesn't have — refusing at the door is simpler).
+
+### D-36 · Draft-deletion detection & recovery (FR-16 / AD-25)  (2026-07-25, Nhan's request + audit finding #3)
+**Context:** deleting the draft UserDoc mid-flow stranded the run — it stood still, then the publish
+404'd on the missing page and `@agent resume` replayed the same 404 forever (2/2-confirmed audit
+finding). Nhan asked the agent to catch the deletion, alert + @mention the PM, and recover (restore
+from trash or recreate with the exact latest content).
+**Decision:** a third Confluence Automation rule (`page_trashed`) → `EventType.CONFLUENCE_PAGE_TRASHED`
+→ `_dispatch_page_trashed` → `Orchestrator.apply_draft_deleted`, delegating to
+`Publisher.recover_draft`: read the page; if `current` → healthy no-op; if `trashed` → restore in
+place (v1 PUT `status: current`, then re-move to the draft folder) or, on failure, recreate a new
+page with the trashed page's still-readable content (stamped, marker, moved) and repoint
+`userdoc_page_id`; if unreadable → unrecoverable. Always @-mention the PM on the Review ticket with
+the outcome. If the run had errored on the missing page, re-enter at `last_good_checkpoint`. The same
+`recover_draft` runs at the top of `on_publishing`, so a missed deletion event self-heals at publish.
+**Rationale:** restore keeps the page id (the review-ticket link survives); recreate guarantees "exact
+same content as the latest version" even when restore is blocked; idempotency (a redelivery finds the
+page healthy) makes it safe to fire on every event and at publish. No dedicated untrash endpoint
+exists — the v1 status PUT is the supported workaround; a trashed page is still readable, which is
+what makes both paths possible.
+**Alternatives rejected:** re-drafting from the source PRD on deletion (loses the PM's review edits);
+relying only on the deletion webhook (best-effort delivery — hence the publish-time defensive
+recovery too).
+
+### D-37 · Missing review-loop state edges added (structure-confirm ↔ clarification)  (2026-07-25, audit)
+**Context:** the audit (state-machine dimension, rated high) found `awaiting_structure_confirm →
+awaiting_clarification` and `awaiting_clarification → awaiting_structure_confirm` were not legal
+edges. With the conversation-aware interpreter (D-30), a reply at one wait can legitimately route to
+the other (a clarification answer that is really plain feedback; a confirmation reply that surfaces an
+FR-08 trigger) → `IllegalStageTransition` → HTTP 500 (the D-31 class of bug). The verifiers couldn't
+vote (org spend limit), so this was confirmed by reading the code directly.
+**Decision:** added both edges; the two review-loop waits are now fully interconnected. Self-
+transitions were already legal, so re-restate/re-clarify needed nothing.

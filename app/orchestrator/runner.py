@@ -203,6 +203,91 @@ class Orchestrator:
             )
             return await self._advance_unlocked(prd_id)
 
+    async def apply_draft_deleted(self, prd_id: str) -> RunResult:
+        """FR-16 — a human deleted the run's UserDoc draft page mid-flow.
+
+        The agent does not stand still: it restores the page from trash (or recreates it with the
+        last content), tells the PM on the review ticket, and — if the run had already errored because
+        the page was gone — re-enters at the failed stage so it self-recovers. Idempotent and under
+        the serial lock (AD-5): a redelivery finds the page already `healthy` and is a no-op.
+        """
+        async with self._lock:
+            state = self._repository.state.require(prd_id)
+            if not state.userdoc_page_id:
+                return RunResult(prd_id, state.stage, stopped_reason="no draft page to recover")
+
+            context = self._context_factory(state)
+            try:
+                recovery = await context.recover_draft()
+            except AgentError as error:
+                return self._to_error(prd_id, state, error)
+
+            if recovery.action == "healthy":
+                return RunResult(
+                    prd_id, state.stage, stopped_reason="draft intact; nothing to recover"
+                )
+
+            # Repoint the durable state at the recreated page (its id changed).
+            if recovery.action == "recreated" and recovery.page_id:
+                self._repository.state.update_fields(prd_id, userdoc_page_id=recovery.page_id)
+                state = self._repository.state.require(prd_id)
+
+            # Alert the PM on the review ticket (@mention), whatever the outcome.
+            if state.review_ticket_key:
+                await context.post_comment(
+                    state.review_ticket_key, self._draft_recovered_body(context, recovery, state)
+                )
+
+            # If the run had errored *because* the page was gone, self-recover now that it is back.
+            if state.stage is Stage.ERROR and recovery.action in ("restored", "recreated"):
+                checkpoint = state.last_good_checkpoint or Stage.DETECTED
+                self._repository.state.advance_stage(
+                    prd_id, checkpoint, queue_status=QueueStatus.IN_PROGRESS
+                )
+                return await self._advance_unlocked(prd_id)
+
+            return RunResult(prd_id, state.stage, stopped_reason=f"draft {recovery.action}")
+
+    @staticmethod
+    def _draft_recovered_body(context, recovery, state) -> dict:
+        from app.domain import adf
+
+        pm = adf.mention(context.tenant.pm_account_id)
+        url = context.draft_page_url(recovery.page_id or state.userdoc_page_id or "")
+        if recovery.action == "restored":
+            return adf.doc(
+                adf.paragraph(
+                    pm,
+                    adf.text(" heads-up: the draft UserDoc page was deleted, so I "),
+                    adf.strong("restored it from the trash"),
+                    adf.text(" — no content was lost. Please give it a quick look: "),
+                    adf.link("open the draft", url),
+                    adf.text(". Nothing else about the review has changed."),
+                )
+            )
+        if recovery.action == "recreated":
+            return adf.doc(
+                adf.paragraph(
+                    pm,
+                    adf.text(" the draft UserDoc page was deleted. I couldn't restore it, so I "),
+                    adf.strong("recreated it with its latest content"),
+                    adf.text(" here: "),
+                    adf.link("open the new draft", url),
+                    adf.text(" (the previous link is now dead). Please re-check it."),
+                )
+            )
+        return adf.doc(  # unrecoverable
+            adf.paragraph(
+                pm,
+                adf.text(" the draft UserDoc page was deleted and I "),
+                adf.strong("could not recover it"),
+                adf.text(
+                    " — it may have been permanently purged from the trash. Please restore it from "
+                    "the trash if you can, or reply here and I'll re-draft it from the PRD."
+                ),
+            )
+        )
+
     async def _act_on_feedback(self, prd_id, state, context, decision, outcome) -> None:
         """Persist the routing outcome. The *decision* is the LLM's; the *routing* is deterministic."""
         if outcome.action is FeedbackAction.APPLY_FEEDBACK:

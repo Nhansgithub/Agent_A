@@ -21,6 +21,7 @@ from app.agents.publisher import Publisher
 from app.agents.ticket_manager import PUBLISHING_TICKET_SUMMARY_PREFIX, TicketManager
 from app.config.schema import TenantConfig
 from app.domain import adf
+from app.domain.errors import AgentError
 from app.domain.stage import PendingGate, Stage
 from app.domain.state import PrdState
 from app.orchestrator.stages import Advance, Park, StageOutcome
@@ -41,6 +42,7 @@ class PublishContext(Protocol):
     async def space_admin_account_ids(self) -> tuple[str, ...]: ...
     async def post_comment(self, issue_key: str, body: dict) -> None: ...
     async def record_publish_progress(self, **markers: object) -> None: ...
+    async def recover_draft(self): ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,10 +95,30 @@ class PublishingHandlers:
     # -- FR-15: the publish transaction --------------------------------------------------------
 
     async def on_publishing(self, context: PublishContext, state: PrdState) -> StageOutcome:
+        # Self-heal a draft deleted while parked (FR-16 / audit 2026-07-25). Idempotent: a no-op if
+        # the page is fine. Without this, a draft trashed before the Head of Product's approval makes
+        # move_page 404 and every `@agent resume` replays the same 404 forever — a dead-end. Recover
+        # the page (restore or recreate) BEFORE the restrict/move/export transaction runs.
+        recovery = await context.recover_draft()
+        if recovery.action == "unrecoverable":
+            raise AgentError(
+                message="The UserDoc draft page was deleted and could not be recovered for publish.",
+                suggested_fix=(
+                    "Restore the draft page from the Confluence trash, then reply `@agent resume` on "
+                    "the error ticket. If it was permanently purged, the run must be re-drafted."
+                ),
+                operation="publisher.recover_draft",
+                context={"page": state.userdoc_page_id or ""},
+            )
+        page_id = recovery.page_id or state.userdoc_page_id or ""
+        if recovery.action == "recreated":
+            # The page id changed — repoint state before the transaction records against it (AD-11).
+            await context.record_publish_progress(userdoc_page_id=page_id)
+
         result = await context.publisher.publish(
             tenant=context.tenant,
             prd_id=context.prd_id,
-            page_id=state.userdoc_page_id or "",
+            page_id=page_id,
             page_title=state.prd_title or "UserDoc",
             agent_account_id=await context.agent_account_id(),
             space_admin_account_ids=await context.space_admin_account_ids(),

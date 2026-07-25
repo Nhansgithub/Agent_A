@@ -70,9 +70,13 @@ async def _dispatch(composition: Composition, result) -> None:
     run_result = None
 
     if isinstance(event, ConfluencePageEvent):
-        # A page event that admits a *new* PRD records its dedupe key inside `admit` (AD-9), so it is
-        # not recorded again here. A re-entry (renamed page) records below like any follow-up event.
-        run_result = await _dispatch_page(composition, event, tenant)
+        if event.is_trashed_event:
+            # A page was deleted (FR-16). If it is a run's UserDoc draft, recover it and alert the PM.
+            run_result = await _dispatch_page_trashed(composition, event, tenant)
+        else:
+            # A page event that admits a *new* PRD records its dedupe key inside `admit` (AD-9), so it
+            # is not recorded again here. A re-entry (renamed page) records after its work, below.
+            run_result = await _dispatch_page(composition, event, tenant)
     elif isinstance(event, JiraCommentEvent):
         run_result = await _dispatch_comment(composition, event, tenant)
     elif isinstance(event, JiraIssueUpdatedEvent):
@@ -108,7 +112,28 @@ async def _dispatch_page(composition: Composition, event: ConfluencePageEvent, t
     """A page event admits a new PRD (or re-enters a renamed one)."""
     repository = composition.repository
     from app.domain.dedupe import dedupe_key_for
+    from app.domain.stage import PendingGate
     from app.domain.state import PrdState
+
+    # Rename-churn guard (FR-01a). A page's id is stable across renames, so an already-admitted PRD
+    # keeps hitting this path every time its source page is renamed — and each rename is a new
+    # Confluence version, i.e. a new dedupe key, so version-dedup alone would not stop it. The ONLY
+    # existing-run state where a source-page event is actionable is a run parked awaiting a corrected
+    # re-upload: a title mismatch (FR-02a, at `detected`) or a Classifier REJECT (EH-07, at
+    # `confirmed`), both marked `UPLOADING_PM_RENAME`. For any other existing state — drafted, in
+    # review, publishing, errored, complete — the PRD was already taken from its finalized version and
+    # re-drafting on a later source edit is out of scope, so the event is dropped here, cheaply,
+    # BEFORE the version-resolving GET. Toggling the name back and forth after drafting is now a no-op.
+    existing = repository.state.get(event.page_id)
+    if existing is not None and existing.pending_gate is not PendingGate.UPLOADING_PM_RENAME:
+        logger.info(
+            "page %s already admitted (stage=%s gate=%s); source-page change ignored "
+            "(rename-churn guard)",
+            event.page_id,
+            existing.stage.value,
+            existing.pending_gate.value,
+        )
+        return None
 
     event = await _resolve_version(composition, event, tenant)
 
@@ -121,9 +146,17 @@ async def _dispatch_page(composition: Composition, event: ConfluencePageEvent, t
         logger.info("page %s is the agent's own output; not admitted (AD-10)", event.page_id)
         return None
 
+    if existing is None and not await _in_source_folder(composition, event, tenant):
+        # Source-folder admission gate (AD-2/AD-14). The space-wide trigger fires for pages created
+        # anywhere in the space; admitting one that is not in the watched source folder would write a
+        # `detected` row that detection then declines (NOT_IN_SOURCE_FOLDER → Stay), leaving a
+        # permanent dead run that still costs a scan on every ticket lookup. Detection re-checks this
+        # (defense in depth); refusing here keeps the single durable store clean.
+        logger.info("page %s is not in the watched source folder; not admitted", event.page_id)
+        return None
+
     key = dedupe_key_for(tenant.project_id, event)
 
-    existing = repository.state.get(event.page_id)
     if existing is None:
         # Admit the new PRD atomically with its dedupe key (AD-9).
         admitted = repository.admit(
@@ -131,15 +164,60 @@ async def _dispatch_page(composition: Composition, event: ConfluencePageEvent, t
         )
         if admitted is None:
             return None  # lost the admission race to a concurrent duplicate
-    elif not repository.record_event_for(key, event.page_id):
-        # This exact page version was already handled — a redelivery, or an edit we have seen.
+    elif repository.events.is_processed(key):
+        # This exact page version was already handled — a redelivery of the same rename while still
+        # awaiting the corrected upload. (Past-detection runs are already dropped by the guard above.)
         logger.info("page event %s already processed; dropped as duplicate", key.value)
         return None
 
     # Hand the parsed event to the context so detection sees the true creator/labels/container
     # without a live re-fetch (and correctly authored-by the real uploader, not the agent).
     composition.stash_event(event.page_id, event)
-    return await composition.orchestrator.advance(event.page_id)
+    result = await composition.orchestrator.advance(event.page_id)
+
+    # Record a re-entry event's dedupe key AFTER the work, never before (AD-9 crash-safety). A new
+    # admission already recorded its key atomically inside `admit`; for a re-entry (a rename
+    # correction), recording before `advance` would — if the process died mid-advance — leave the key
+    # committed with no stage change, so the redelivery is dropped as a duplicate and the run strands
+    # at `detected`/`confirmed` forever (that stage is not liveness-watched). Recording after means a
+    # crash simply lets the redelivery re-advance, which is idempotent.
+    if existing is not None:
+        repository.record_event_for(key, event.page_id)
+    return result
+
+
+async def _dispatch_page_trashed(composition: Composition, event: ConfluencePageEvent, tenant):
+    """A page was moved to trash (FR-16). Recover it only if it is a tracked UserDoc draft.
+
+    No admission, no version resolution, no dedupe key: recovery is idempotent (a redelivery finds
+    the page already restored → a no-op), so the ingress accepts trashed events without a key and this
+    handler leans on `apply_draft_deleted` for safety. A trashed page that is not any run's draft
+    (a source PRD, or an unrelated page) is ignored.
+    """
+    prd_id = _find_prd_by_userdoc_page(composition.repository, event.page_id)
+    if prd_id is None:
+        logger.info("trashed page %s is not a tracked UserDoc draft; ignored", event.page_id)
+        return None
+    logger.info("draft page %s for run %s was trashed; recovering (FR-16)", event.page_id, prd_id)
+    return await composition.orchestrator.apply_draft_deleted(prd_id)
+
+
+def _find_prd_by_userdoc_page(repository, page_id: str) -> str | None:
+    """Resolve which run owns a (now-trashed) draft page, by `userdoc_page_id`.
+
+    Mirrors `_find_prd_by_ticket`: a linear scan over active + parked/errored runs, fine at demo
+    volume (AD-5). A deleted draft belongs to a run parked or errored between drafting and publish.
+    """
+    from app.domain.stage import LIVENESS_WATCHED_STAGES, PARKED_STAGES
+
+    for status in _ACTIVE_QUEUE_STATUSES:
+        for state in repository.state.list_by_queue_status(status):
+            if state.userdoc_page_id == page_id:
+                return state.prd_id
+    for state in repository.state.list_by_stage(*(PARKED_STAGES | LIVENESS_WATCHED_STAGES)):
+        if state.userdoc_page_id == page_id:
+            return state.prd_id
+    return None
 
 
 async def _resolve_version(composition: Composition, event: ConfluencePageEvent, tenant):
@@ -190,6 +268,21 @@ def _is_agent_output(event: ConfluencePageEvent, tenant) -> bool:
         return True
     agent_folders = {tenant.confluence_draft_folder_id, tenant.confluence_published_folder_id}
     return bool(event.container_id) and event.container_id in agent_folders
+
+
+async def _in_source_folder(composition: Composition, event: ConfluencePageEvent, tenant) -> bool:
+    """Is this page in the watched source folder (FR-01 / AD-14)? — the positive admission gate.
+
+    Fast path: the resolved `container_id` is the source folder directly (a PRD dropped straight into
+    it, the normal case), so no extra call. Otherwise fall back to an ancestors lookup, which also
+    covers a PRD nested under a page inside the source folder. Mirrors detection's own check so the
+    door-guard and detection agree; detection re-runs it as defense in depth.
+    """
+    source = tenant.confluence_source_folder_id
+    if event.container_id == source:
+        return True
+    ancestors = await composition._adapters_for(tenant).confluence.get_page_ancestors(event.page_id)
+    return source in ancestors
 
 
 async def _dispatch_comment(composition: Composition, event: JiraCommentEvent, tenant):

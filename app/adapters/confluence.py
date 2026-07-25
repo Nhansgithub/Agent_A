@@ -188,6 +188,29 @@ class ConfluenceAdapter:
         )
         return self._to_page(body or {})
 
+    async def restore_page(self, page_id: str, *, title: str, version: int) -> None:
+        """Restore a trashed page (status `trashed` → `current`) for FR-16 recovery.
+
+        Confluence Cloud has **no dedicated untrash endpoint**; the supported workaround is a v1
+        content PUT that sets `status: current` with the next version number. A restored page returns
+        to the space **root** (restore drops folder placement), so the caller re-`move_page`s it into
+        the draft folder. Best-effort: if it fails (e.g. the page was purged, or the plan disallows
+        it), the caller recreates the page from the last content instead.
+        """
+        await self._client.request(
+            "PUT",
+            f"{V1}/content/{page_id}",
+            operation="restore_page",
+            json={
+                "id": page_id,
+                "type": "page",
+                "status": "current",
+                "title": title,
+                "version": {"number": version + 1, "message": "Restored by the UserDoc agent"},
+            },
+            context={"page": page_id, "version": str(version)},
+        )
+
     async def move_page(self, page_id: str, folder_id: str) -> None:
         """Place a page into a folder via the **v1** move endpoint (AD-14).
 
@@ -292,4 +315,5 @@ class ConfluenceAdapter:
             body_storage=str(page_body.get("value") or ""),
             labels=tuple(str(item.get("name")) for item in labels if item.get("name")),
             author_account_id=body.get("authorId") or (version.get("authorId")),
+            status=str(body.get("status") or "current"),
         )

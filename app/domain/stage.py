@@ -112,15 +112,25 @@ _LEGAL_TRANSITIONS: dict[Stage, frozenset[Stage]] = {
             Stage.PASSED,
         }
     ),
-    # Where a clarification returns to depends on what asked for it; the orchestrator restores the
-    # stage recorded in `last_good_checkpoint`.
+    # The two review-loop waits (clarification, structure-confirm) are fully interconnected: a PM's
+    # reply to either can route to any of {revise, restate-and-confirm, ask-clarification, back to
+    # open review}. The interpreter is conversation-aware (FR-10a), so a clarification answer can turn
+    # out to be plain feedback needing a restatement, and vice-versa. Missing a cross-edge here throws
+    # IllegalStageTransition and 500s the webhook (the D-31 class of bug). Self-transitions are always
+    # legal (see is_legal_transition), so a re-restate / re-clarify needs no explicit edge.
     Stage.AWAITING_CLARIFICATION: frozenset(
-        {Stage.PRD_TICKET_DONE, Stage.AWAITING_REVIEW, Stage.REVISING}
+        {
+            Stage.PRD_TICKET_DONE,
+            Stage.AWAITING_REVIEW,
+            Stage.REVISING,
+            Stage.AWAITING_STRUCTURE_CONFIRM,
+        }
     ),
-    # REVISING when the PM confirms; AWAITING_REVIEW when they reject the restatement — a rejection
-    # returns to open review for another round (FR-10, amendment 2026-07-25). Without this edge a
-    # "no" raised IllegalStageTransition and 500'd the webhook.
-    Stage.AWAITING_STRUCTURE_CONFIRM: frozenset({Stage.REVISING, Stage.AWAITING_REVIEW}),
+    # REVISING when the PM confirms; AWAITING_REVIEW when they reject the restatement (FR-10a);
+    # AWAITING_CLARIFICATION when the reply surfaces an FR-08 trigger.
+    Stage.AWAITING_STRUCTURE_CONFIRM: frozenset(
+        {Stage.REVISING, Stage.AWAITING_REVIEW, Stage.AWAITING_CLARIFICATION}
+    ),
     Stage.REVISING: frozenset({Stage.AWAITING_REVIEW, Stage.AWAITING_CLARIFICATION}),
     Stage.PASSED: frozenset({Stage.AWAITING_PUBLISH_APPROVAL}),
     Stage.AWAITING_PUBLISH_APPROVAL: frozenset({Stage.PUBLISHING}),

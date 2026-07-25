@@ -3,14 +3,20 @@
 > **This is the file to read first in every session.** It answers exactly one question:
 > *what do I do next?* Keep it short and current. Update it at every story boundary.
 
-**Last updated:** 2026-07-25 (session 3 — ticket attribution / authorship, D-33)
+**Last updated:** 2026-07-25 (session 4 — draft-deletion recovery + rename-churn guard + deep audit)
 **Phase:** Phase 4 — Implementation
 **Scope:** DEMO with FULL HARDENING
 
-> **Latest change (D-33):** agent-created Jira tickets are now stamped `agent-generated` and the
-> Publishing ticket no longer spoofs the Reporter to the Head of Product (assignee unchanged). To move
-> the immutable Jira **Creator** off a personal account, provision a dedicated agent account —
-> [BLOCKERS.md](BLOCKERS.md) B-8 + SETUP-GUIDE Part 1. Suite 496 green, ruff clean, 5/5 contracts.
+> **Latest change (D-35/D-36/D-37 + audit):** two resilience features shipped —
+> **FR-16 draft-deletion recovery** (restore-from-trash or recreate-with-latest-content, @-mention the
+> PM, self-heal an errored run; also runs defensively before publish) and the **FR-01a rename-churn
+> guard** (an already-drafted PRD is no longer re-caught when its name is toggled; stray-space pages
+> refused at the door). Plus 3 audit fixes (crash-safe re-entry, `_first` list traversal, the two
+> review-loop state cross-edges). Suite **515 green**, ruff clean, 5/5 contracts.
+>
+> ⚠️ **Needs a Droplet redeploy + a THIRD Confluence Automation rule** (page-trashed) for FR-16 to
+> fire live — SETUP-GUIDE Part 7b. Without the rule, deletion recovery still works defensively at
+> publish time, just not proactively.
 
 ---
 

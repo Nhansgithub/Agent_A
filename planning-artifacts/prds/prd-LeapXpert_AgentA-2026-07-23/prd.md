@@ -111,6 +111,18 @@ This PRD specifies the **demo scope**: single provider (Anthropic Claude API), S
 The system SHALL receive Confluence `page-created` webhook events for the configured source folder(s). On each event it SHALL determine which project (tenant) the event belongs to via the config registry (source folder → project).
 - **Self-ingestion guard:** Because published UserDocs are moved to the **Published-UserDocs folder** *outside* the watched source folder (FR-15), the agent's own output is never re-detected here. As defense-in-depth, detection SHALL **also** exclude the agent's own pages via a label/path check. The exact exclusion-guard mechanism is deferred to Architecture (§13.1).
 
+> **Amendment 2026-07-25 (FR-01a — admission is once-per-PRD; rename churn is ignored).** A page's
+> id is stable across renames, so a PRD already taken into the flow keeps receiving `page-updated`
+> events every time its name is changed — and since each rename bumps the Confluence version (a new
+> dedupe key), version-dedup alone does not stop it. The system SHALL re-process a source-page event
+> for an **already-admitted** run **only** while that run is parked awaiting a corrected re-upload
+> (FR-02a title mismatch, or EH-07 Classifier reject). Once the PRD has advanced past detection
+> (drafted, in review, publishing, complete, or errored), a later rename/edit of the source page is
+> **ignored** — it produces no new ticket, draft, or re-detection. Toggling the name back and forth,
+> however many times, cannot make the agent re-catch the same PRD. Also: a page created **anywhere in
+> the space but not in the source folder** is refused at admission (not merely declined by detection
+> afterward), so it never leaves a dead run in the store.
+
 **FR-02 — Title gate.**
 The system SHALL treat a page as a candidate PRD only if its title matches the pattern `final_PRD_<name>`. (Demo-agreed exact convention.)
 - **FR-02a — Title mismatch:** If a page lands in the source folder but the title does NOT match, the system SHALL create a **small rename-request task ticket in the Review project**, assigned to the **Uploading PM** — the page creator, taken from the Confluence page-creator field, **not** the config Reviewer PM — asking them to confirm it is a PRD and rename it to `final_PRD_...`. This rename-request ticket is **entirely separate** from the draft-review ticket (FR-06). The system SHALL NOT process the page further until a matching page-created/`page-updated` event arrives. Assigning the Uploading PM requires a Confluence→Jira identity mapping (see §13 Q4 / §13.1). (See §8 edge handling for the rename re-trigger.)
@@ -196,6 +208,26 @@ When the Publishing ticket is marked Done, the agent SHALL:
 2. **Move** the final UserDoc page to the dedicated **Published-UserDocs folder** (`confluence_published_folder_id`), which sits **adjacent to (next to), not inside,** the watched source `final_PRD` folder — so the published output is never re-ingested by detection (FR-01).
 3. **Export** the final UserDoc as a **Markdown file** to **server storage** (the running server's disk), for the later SSG step.
 4. Mark the flow **Complete** in the state store.
+
+> **Amendment 2026-07-25 (FR-16 — draft-deletion detection & recovery).** If the UserDoc **draft
+> page** is deleted (moved to trash) while a run is in flight — during review, structure-confirm,
+> clarification, revising, or while awaiting publish approval — the agent SHALL detect it (a
+> Confluence *page-trashed* Automation webhook), **not** stand still, and:
+> 1. **recover the artifact** — restore the page from trash in place (same id, so the review-ticket
+>    link still works); if restore fails, **recreate** a new page holding the **exact latest content**
+>    (read back from the still-readable trashed page) in the draft folder, stamped as agent output,
+>    and repoint the run's `userdoc_page_id` to it;
+> 2. **notify the Reviewer PM** with a comment on the Review ticket, **@-mentioning** them, saying the
+>    draft was deleted and what the agent did (restored / recreated with a new link / could not
+>    recover — asking them to restore it or let the agent re-draft);
+> 3. if the run had already **errored** because the page was gone, **self-recover** by re-entering at
+>    `last_good_checkpoint` now that the page is back.
+>
+> The recovery is idempotent (a redelivered or stale deletion event finds the page healthy and is a
+> no-op) and is also applied **defensively at publish time**: the publish transaction recreates a
+> missing draft before restrict/move/export, so a deletion the webhook missed can no longer dead-end
+> `@agent resume` on a 404. A trashed page that is **not** a tracked draft (a source PRD, an unrelated
+> page) is ignored.
 
 ### 6.2 PM structured feedback format
 

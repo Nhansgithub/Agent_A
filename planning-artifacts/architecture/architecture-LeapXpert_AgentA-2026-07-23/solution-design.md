@@ -198,6 +198,17 @@ flowchart TB
 
 The single most important operational rule: **the Docker image is built off the box** (in CI or a registry) and **pulled** — a build on 1 GB can OOM. On the Droplet, Caddy terminates TLS and reverse-proxies to a single Uvicorn worker bound to localhost; the firewall exposes only 443 and 22; a 1–2 GB swap file cushions transient spikes. SQLite is in-process (no database server to feed), and the serial queue (AD-5) doubles as a memory-safety measure — large PRD payloads are the main RAM consumer, and only one is ever resident. If the §12 end-to-end run still runs tight, resizing the Droplet up is a few-minute, reversible operation, so nothing hard-codes a 1-GB-only assumption.
 
+> **Amendment 2026-07-25 — two resilience additions (AD-24 rename churn, AD-25 draft deletion).**
+> *Rename churn:* a page id is stable across renames, so an already-drafted PRD keeps receiving
+> `page-updated` events as its name is toggled; the router now re-processes a source-page event for an
+> existing run **only** while it is parked awaiting a corrected re-upload, and refuses a brand-new
+> page unless it is in the source folder — so toggling a name after drafting produces no duplicate
+> tickets or drafts and no dead rows. *Draft deletion:* a third Automation rule (page-trashed) lets
+> the agent detect a deleted UserDoc draft and **restore it from trash (or recreate it with the exact
+> latest content), @-mention the PM, and self-recover an errored run** — the same recovery also runs
+> defensively before publish, so a deletion can no longer dead-end the flow. See PRD FR-01a / FR-16
+> and Spine AD-24 / AD-25.
+
 **Liveness and recovery (AD-22).** Atlassian webhook delivery is best-effort, so a dropped `issue-updated` event could otherwise strand a run that a human already approved — with zero signal that anything is wrong. A lightweight scheduled reconciler closes that gap within the memory envelope (default: a system `cron` job hitting an authenticated `localhost` admin endpoint; an in-process scheduler is the alternative). Each sweep (a) flags runs parked in `awaiting_review` / `awaiting_publish_approval` / `error` past a staleness threshold and alerts through the same admin surface plus a LangSmith signal, and (b) re-polls the two gate tickets — if a gate is now Done, it feeds that as an *input*, exactly as the missing webhook would have. This adds recoverability and observability, **not a timeout**: the orchestrator still owns the stage, the agent still never moves a gate ticket, and the park is still indefinite. It cannot double-advance a stage — a reconcile-poll and a webhook for the same transition collide on the dedupe key (AD-9), the reconciler enters through the same serial queue (AD-5), and advancing a stage the run has already left is a no-op (AD-11).
 
 **Backup / DR (AD-23).** Because the run state — `last_good_checkpoint`, `processed_events`, recorded ids — is authoritative *only* on the Droplet disk, losing that disk mid-run is not a benign event: a redelivered webhook would double-create or re-publish. So the single SQLite store is replicated off-box: `litestream` (pin `>= 0.5.4`; 0.5.15 current) streams the WAL continuously to DigitalOcean Spaces as a small sidecar, with an hourly `sqlite3 .backup` + `/data` tar to Spaces as the simpler alternative. Restore is point-in-time. This ships for the demo (full hardening), not as a seam.

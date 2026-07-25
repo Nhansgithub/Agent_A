@@ -30,6 +30,10 @@ class EventType(StrEnum):
 
     CONFLUENCE_PAGE_CREATED = "confluence.page_created"
     CONFLUENCE_PAGE_UPDATED = "confluence.page_updated"
+    CONFLUENCE_PAGE_TRASHED = "confluence.page_trashed"
+    """A page was deleted (moved to trash). Used to detect a UserDoc draft being removed mid-flow so
+    the agent can restore/recreate it and alert the PM (FR-16), rather than silently stranding the run."""
+
     JIRA_COMMENT_CREATED = "jira.comment_created"
     JIRA_ISSUE_UPDATED = "jira.issue_updated"
 
@@ -64,6 +68,10 @@ class ConfluencePageEvent:
     space_key: str | None = None
     labels: tuple[str, ...] = ()
     """AD-10 defense-in-depth: a page carrying `agent-generated` never enters detection."""
+
+    @property
+    def is_trashed_event(self) -> bool:
+        return self.event_type is EventType.CONFLUENCE_PAGE_TRASHED
 
     @property
     def entity_id(self) -> str:

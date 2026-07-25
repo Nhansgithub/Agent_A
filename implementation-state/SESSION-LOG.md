@@ -724,3 +724,43 @@ Also updated `deploy/README.md` to the new build path.
 
 **Tests:** 496 → 496 (net: −`build-image.yml` artifact test, +`needs: test` gate test). Suite green,
 ruff clean (incl. `ruff format --check`), 5/5 contracts. Recorded as **D-34**.
+
+---
+
+## Session 4 — 2026-07-25 · Two resilience features + a deep adversarial audit
+
+**Trigger:** Nhan asked for (1) draft-deletion detection + recovery, (2) rename-churn protection, and
+a deep audit for any remaining mismatch/dedup/illogic/inefficiency.
+
+**Audit.** Ran a 7-dimension adversarial audit workflow (opus finders + skeptic verifiers). It hit the
+org monthly spend limit partway (16 of 39 agents errored), but returned 4 verified findings plus a
+high-rated state-machine finding the verifiers couldn't reach. All fixed:
+- **record-after-advance** (rename re-entry recorded its dedupe key before the work → a crash
+  stranded the run behind a committed key). Now recorded after `advance`.
+- **source-folder admission gate** — a page created anywhere in the space was admitted then left a
+  dead `detected` row; now refused at the door unless in the source folder (container/ancestors).
+- **`_first` list-index traversal** — the `ancestors.0.id` container fallback was dead code.
+- **draft-deletion dead-end** (= Feature A below).
+- **state-machine cross-edges** structure-confirm ↔ clarification (D-37) — the D-31 class of 500,
+  now reachable because of the conversational interpreter (D-30).
+
+**Feature B — rename-churn guard (FR-01a / AD-24, D-35).** An existing run re-processes a source-page
+event only while parked awaiting a rename correction (`UPLOADING_PM_RENAME`); past detection it's
+dropped before the version GET. Toggling a name after drafting is a no-op — no duplicate tickets/
+drafts.
+
+**Feature A — draft-deletion recovery (FR-16 / AD-25, D-36).** New `page_trashed` event → recover the
+draft: restore from trash in place (same id → ticket link survives), else recreate with the exact
+latest content; @-mention the PM on the Review ticket; self-recover an errored run. The same recovery
+runs defensively before publish, so a missed deletion no longer dead-ends `@agent resume`. Needs a
+third Confluence Automation rule (SETUP-GUIDE Part 7b).
+
+**Tests:** 492 → 515. New: `tests/test_draft_recovery.py` (9) + trash routing/parsing + rename-churn
+guard + source-folder gate + cross-edge + publish self-heal. Suite green, ruff clean, 5/5 contracts.
+
+**Planning docs amended** (dated 2026-07-25): PRD FR-01a + FR-16; Spine AD-24 + AD-25; solution-design
+note; SETUP-GUIDE Part 7b (three Automation rules, Custom-data body).
+
+**Blocker noted:** the audit workflow was cut short by the org **monthly spend limit** — some verify
+agents didn't run. The confirmed findings are solid; a re-run for full verification is possible once
+the limit resets (`/usage-credits`).

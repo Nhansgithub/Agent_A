@@ -446,3 +446,45 @@ async def test_run_context_transcript_degrades_to_empty_on_a_read_failure() -> N
     )
 
     assert await ctx._review_conversation("TESTREV-1") == ()
+
+
+# ---------------------------------------------------------------------------------------------
+# State-machine cross-edges between the two review-loop waits (audit 2026-07-25, D-31 class).
+# A conversation-aware reply can turn a structure-confirm into a clarification and vice-versa;
+# the missing edges used to throw IllegalStageTransition and 500 the webhook.
+# ---------------------------------------------------------------------------------------------
+
+
+async def test_a_clarify_raised_while_awaiting_structure_confirm_does_not_500() -> None:
+    orchestrator, repository, context = build(
+        FeedbackDecision(
+            route=FeedbackRoute.CLARIFY,
+            trigger=ClarificationTrigger.UNDEFINED_TERM,
+            question="What does 'quick-add' mean here?",
+        ),
+        stage=Stage.AWAITING_STRUCTURE_CONFIRM,
+        pending_feedback=STRUCTURED,
+    )
+
+    result = await orchestrator.apply_pm_comment("page-1", comment_text="wait, what's quick-add?")
+
+    assert result.final_stage is Stage.AWAITING_CLARIFICATION, "structure-confirm → clarification"
+    assert result.error is None
+
+
+async def test_plain_feedback_while_awaiting_clarification_re_restates() -> None:
+    orchestrator, repository, context = build(
+        FeedbackDecision(
+            route=FeedbackRoute.CONFIRM_STRUCTURE,
+            structured_feedback=STRUCTURED,
+            question="is this what you mean?",
+        ),
+        stage=Stage.AWAITING_CLARIFICATION,
+    )
+
+    result = await orchestrator.apply_pm_comment("page-1", comment_text="oh, and shorten the intro")
+
+    assert result.final_stage is Stage.AWAITING_STRUCTURE_CONFIRM, (
+        "clarification → structure-confirm"
+    )
+    assert result.error is None

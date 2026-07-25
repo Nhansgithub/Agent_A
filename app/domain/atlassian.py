@@ -74,7 +74,14 @@ class ConfluencePage:
     labels: tuple[str, ...] = ()
     author_account_id: str | None = None
     ancestor_ids: tuple[str, ...] = field(default_factory=tuple)
+    status: str = "current"
+    """Confluence content status: ``current``, ``trashed`` (in the bin, restorable), or ``draft``.
+    A trashed page is still readable via the API, which is what lets FR-16 recover its last content."""
 
     def in_folder(self, folder_id: str) -> bool:
         """FR-01 / AD-14 — is this page located in the given folder?"""
         return self.parent_id == folder_id or folder_id in self.ancestor_ids
+
+    @property
+    def is_trashed(self) -> bool:
+        return self.status == "trashed"

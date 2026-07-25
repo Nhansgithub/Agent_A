@@ -352,22 +352,46 @@ so this comes after the server is deployed (Part 8 / Epic 6). Your address will 
 
 ### 7b. Confluence
 
-Confluence Cloud has no equivalent admin webhook screen, so use an **Automation** rule instead.
+Confluence Cloud has no equivalent admin webhook screen, so use **Automation** rules instead. Create
+**three** rules, all with the same *Send web request* action, differing only in the trigger:
 
-1. In your Confluence space: **Space settings** → **Automation** → **Create rule**.
-2. **Trigger:** *Page created*. (Create a second rule for *Page updated* — this one matters: it is how
-   a renamed page re-enters the flow.)
-3. **Action:** *Send web request*.
-   - **URL:** your public webhook address
+| Rule | Trigger | Why it matters |
+|---|---|---|
+| **PRD created** | *Page created* | starts a run when a `final_PRD_*` page appears |
+| **PRD renamed** | *Page updated* | how a mis-named PRD re-enters the flow after it's corrected (FR-02a/EH-04) |
+| **Draft deleted** | *Page trashed* (a.k.a. *Page removed/deleted*) | lets the agent detect and recover a deleted UserDoc draft (FR-16) |
+
+For **each** rule:
+
+1. **Space settings** → **Automation** → **Create rule**, pick the trigger above.
+2. **Action:** *Send web request*.
+   - **URL:** `https://<your-domain>/webhooks/atlassian`
    - **Method:** `POST`
-   - **Web request body:** the rule's default page payload
-   - **Headers:** add `X-Webhook-Secret` with your `WEBHOOK_SHARED_SECRET` value
-     *(Automation cannot compute a signature, so the agent accepts this header as the alternative.)*
-4. Turn the rule on. Repeat for *Page updated*.
+   - **Web request body:** **Custom data** (not "Empty" and not the default) — paste exactly:
+     ```json
+     {"webhookEvent": "<EVENT>", "page": {"id": "{{page.id}}", "title": "{{page.title}}"}}
+     ```
+     Replace `<EVENT>` with `page_created`, `page_updated`, or `page_trashed` to match the trigger.
+   - **Headers:** add `X-Webhook-Secret` = your `WEBHOOK_SHARED_SECRET`
+     *(Automation cannot compute an HMAC, so the agent accepts this shared-secret header instead.)*
+   - Leave *"Delay execution … until we've received a response"* **unchecked** — a drafting run takes
+     a minute, and the agent acks the webhook immediately anyway.
+3. Turn the rule on.
+
+> **Why Custom data, not the default body?** Confluence Automation exposes **no page-version smart
+> value at all**, and its default payload does not carry the fields the agent needs. The agent only
+> needs the page **id** (and title); it resolves the authoritative version itself with one API read.
+> A body of `Empty` or the default is silently dropped as unparseable.
+
+> **Scope the rules to the source folder if you can.** The triggers are space-wide by default; adding
+> a condition that limits *PRD created/renamed* to the source folder avoids the agent even seeing
+> unrelated pages. It is defense-in-depth only — the agent already refuses any page outside the source
+> folder and any page it created itself.
 
 > **If a webhook is silently dropped** — Atlassian delivery is best-effort — the scheduled liveness
-> check catches it and re-polls the two approval tickets, so an approval you already gave is not lost.
-> That is a safety net, not a substitute for correct configuration.
+> check catches a missed *gate* transition, and a missed *deletion* is caught at publish time (the
+> publisher recreates a missing draft rather than failing). Neither is a substitute for correct
+> configuration.
 
 ---
 

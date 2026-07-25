@@ -162,6 +162,7 @@ class FakeTickets:
 @dataclass
 class FakePublisher:
     published: int = 0
+    published_page_ids: list[str] = field(default_factory=list)
 
     async def publish(
         self,
@@ -181,6 +182,7 @@ class FakePublisher:
         from app.agents.publisher import PublishResult
 
         self.published += 1
+        self.published_page_ids.append(page_id)
         await on_step(restriction_applied_at=utc_now())
         await on_step(moved_to_published_at=utc_now())
         path = f"{tenant.md_export_dir}/{prd_id}.md"
@@ -198,6 +200,7 @@ class FakePublishContext:
     publisher: FakePublisher = field(default_factory=FakePublisher)
     ticket_manager: FakeTickets = field(default_factory=FakeTickets)
     comments: list[tuple[str, dict]] = field(default_factory=list)
+    recovery_action: str = "healthy"
 
     def draft_page_url(self, page_id):
         return f"https://x/{page_id}"
@@ -213,6 +216,12 @@ class FakePublishContext:
 
     async def record_publish_progress(self, **markers):
         self.repository.state.update_fields(self.prd_id, **markers)
+
+    async def recover_draft(self):
+        from app.agents.publisher import DraftRecovery
+
+        page_id = self.repository.state.require(self.prd_id).userdoc_page_id
+        return DraftRecovery(action=self.recovery_action, page_id=page_id)
 
 
 def build(*, stage: Stage, **state_kwargs):
@@ -453,3 +462,44 @@ async def test_a_normal_publish_posts_no_unrestricted_notice() -> None:
 
     assert repository.state.require("page-1").stage is Stage.COMPLETE
     assert [c for c in context.comments if c[0] == "TESTMAIN-9"] == []
+
+
+# -- FR-16: publish self-heals a draft deleted before the Head of Product's approval ------------
+
+
+async def test_publishing_recreates_a_deleted_draft_before_publishing() -> None:
+    """A draft trashed while parked at awaiting_publish_approval must NOT dead-end the publish. The
+    self-heal recreates it and the transaction runs against the new page id (audit finding #3)."""
+    orchestrator, repository, context = build(stage=Stage.PUBLISHING, publishing_ticket_key="M-9")
+    context.recovery_action = "recreated"
+
+    # simulate recreate producing a new id: recover_draft returns the state's page id, so repoint it
+    async def recreate(self=context):
+        from app.agents.publisher import DraftRecovery
+
+        return DraftRecovery(action="recreated", page_id="recreated-42")
+
+    context.recover_draft = recreate  # type: ignore[method-assign]
+
+    result = await orchestrator.advance("page-1")
+
+    assert result.final_stage is Stage.COMPLETE, "publish completed despite the deletion"
+    assert context.publisher.published_page_ids == ["recreated-42"], "published the recovered page"
+    assert repository.state.require("page-1").userdoc_page_id == "recreated-42", "state repointed"
+
+
+async def test_publishing_errors_actionably_when_the_draft_is_unrecoverable() -> None:
+    orchestrator, repository, context = build(stage=Stage.PUBLISHING, publishing_ticket_key="M-9")
+
+    async def gone(self=context):
+        from app.agents.publisher import DraftRecovery
+
+        return DraftRecovery(action="unrecoverable", page_id=None)
+
+    context.recover_draft = gone  # type: ignore[method-assign]
+
+    result = await orchestrator.advance("page-1")
+
+    assert result.final_stage is Stage.ERROR
+    assert context.publisher.published == 0, "never attempted to publish a page that isn't there"
+    assert "resume" in (result.error.suggested_fix if result.error else ""), "actionable EH-01 fix"

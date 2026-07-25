@@ -192,6 +192,17 @@ class RunContext:
             if c.body_text.strip()
         )
 
+    async def recover_draft(self):
+        """Restore or recreate the run's deleted UserDoc draft (FR-16). Idempotent."""
+        page_id = self._repository.state.require(self.prd_id).userdoc_page_id
+        if not page_id:
+            from app.agents.publisher import DraftRecovery
+
+            return DraftRecovery(action="healthy", page_id=None)
+        return await self.publisher.recover_draft(
+            tenant=self.tenant, prd_id=self.prd_id, page_id=page_id
+        )
+
     async def post_comment(self, issue_key: str, body: dict) -> None:
         """Post an agent comment and immediately claim its id in `processed_events` (AD-9, AD-10).
 

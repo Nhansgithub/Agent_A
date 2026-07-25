@@ -204,6 +204,18 @@ flowchart TD
 - **Prevents:** unrecoverable loss of run state (now authoritative-only-on-disk), and the post-crash double-create / re-publish a lost `processed_events` + recorded-ids table would cause on webhook redelivery.
 - **Rule:** because `last_good_checkpoint`, `processed_events`, and the recorded external ids are **authoritative only on the Droplet disk** (AD-2 / AD-11) — Atlassian is **not** a full run-state reconstruction source — the single SQLite store is **replicated off-box**. **Default: `litestream` (pin `>= 0.5.4`; 0.5.15 current)** continuously streaming the SQLite WAL to **DigitalOcean Spaces** (S3-compatible), running as a **small-RAM sidecar / host process** inside the AD-21 envelope; **alternative:** an hourly `sqlite3 .backup` + `/data` tar pushed to Spaces via `cron`. Restore is point-in-time from the replica. The backup is **built for the demo** (full hardening), not merely noted as a seam.
 
+### AD-24 — Admission is once-per-PRD; rename churn is dropped at the door [AMENDMENT 2026-07-25]
+
+- **Binds:** the webhook router (`_dispatch_page`), detection.
+- **Prevents:** an already-drafted PRD being re-caught — and producing duplicate tickets/drafts — as its source page is renamed back and forth (each rename is a new version, so AD-9 version-dedup alone does not stop it); and stray pages elsewhere in the space leaving dead `detected` rows in the one store.
+- **Rule:** for an **existing** run, a source `page` event is actionable **only** while the run is parked awaiting a corrected re-upload (`pending_gate == UPLOADING_PM_RENAME`, i.e. FR-02a title mismatch at `detected` or EH-07 reject at `confirmed`); any other existing state drops the event **before** the version-resolving GET. A re-entry's dedupe key is recorded **after** the advance, not before, so a crash mid-advance lets the redelivery re-advance (idempotent) instead of stranding the run behind a committed-but-unworked key. A **new** page is admitted **only if it is in the watched source folder** (container or ancestors), refusing stray-space pages at the door rather than letting detection leave a dead row. Detection re-checks folder/label/author as defense in depth.
+
+### AD-25 — Draft-deletion detection & recovery [AMENDMENT 2026-07-25]
+
+- **Binds:** the webhook router, the Publisher, the orchestrator, the Confluence adapter.
+- **Prevents:** a human deleting the UserDoc draft mid-flow silently stranding the run (it used to stand still, then 404 at publish with a non-resumable `@agent resume` loop).
+- **Rule:** a Confluence **page-trashed** event (a third Automation rule) whose page is a run's `userdoc_page_id` triggers `apply_draft_deleted`, which is **idempotent** and: (1) **restores** the page from trash in place (same id → the review-ticket link survives) via the v1 content PUT `status: current` (no dedicated untrash endpoint exists), re-moving it into the draft folder; (2) if restore fails, **recreates** a new page with the trashed page's still-readable latest content, stamped as agent output (AD-10/AD-11), repointing `userdoc_page_id`; (3) **@-mentions the Reviewer PM** on the Review ticket with what happened; (4) if the run had **errored** because the page was gone, re-enters at `last_good_checkpoint`. The same recovery runs **defensively before the publish transaction**, so a missed deletion event no longer dead-ends `@agent resume` on a 404. A trashed page that is not a tracked draft is ignored. The trash event carries no version and needs none — recovery reads the live page.
+
 ## Consistency Conventions
 
 | Concern | Convention |

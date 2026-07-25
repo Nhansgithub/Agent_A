@@ -42,14 +42,24 @@ __all__ = [
 
 
 def _first(payload: dict[str, Any], *paths: str) -> Any:
-    """Return the first present value among dotted paths. Tolerates the known payload variants."""
+    """Return the first present value among dotted paths. Tolerates the known payload variants.
+
+    A numeric path segment indexes into a list (e.g. ``ancestors.0.id``) — without this, the
+    documented ancestors fallback was dead code, since Confluence's ``ancestors`` is a list and the
+    dict-only walk bailed at the ``0`` segment.
+    """
     for path in paths:
         current: Any = payload
         for part in path.split("."):
-            if not isinstance(current, dict) or part not in current:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            elif isinstance(current, list) and part.lstrip("-").isdigit():
+                index = int(part)
+                current = current[index] if -len(current) <= index < len(current) else None
+            else:
                 current = None
+            if current is None:
                 break
-            current = current[part]
         if current is not None:
             return current
     return None
@@ -81,6 +91,12 @@ def parse_confluence_page_event(payload: dict[str, Any]) -> ConfluencePageEvent:
         event_type = EventType.CONFLUENCE_PAGE_CREATED
     elif "page_updated" in event_name or "page_update" in event_name:
         event_type = EventType.CONFLUENCE_PAGE_UPDATED
+    elif any(
+        token in event_name for token in ("page_trashed", "page_removed", "page_deleted", "trash")
+    ):
+        # A page was moved to trash (FR-16). Confluence Automation's page-deletion trigger names vary
+        # ("page trashed" / "page removed"); accept the known spellings.
+        event_type = EventType.CONFLUENCE_PAGE_TRASHED
     else:
         raise UnsupportedEvent(f"unrecognised Confluence event {event_name!r}")
 
@@ -190,6 +206,9 @@ def parse_jira_issue_updated_event(payload: dict[str, Any]) -> JiraIssueUpdatedE
 _PARSERS: dict[str, Any] = {
     "page_created": parse_confluence_page_event,
     "page_updated": parse_confluence_page_event,
+    "page_trashed": parse_confluence_page_event,
+    "page_removed": parse_confluence_page_event,
+    "page_deleted": parse_confluence_page_event,
     "comment_created": parse_jira_comment_event,
     "jira:issue_updated": parse_jira_issue_updated_event,
     "issue_updated": parse_jira_issue_updated_event,

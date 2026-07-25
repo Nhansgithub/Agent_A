@@ -41,6 +41,10 @@ class FakeOrchestrator:
         self.calls.append(("apply_admin_resume", prd_id))
         return RunResult(prd_id, Stage.CONFIRMED)
 
+    async def apply_draft_deleted(self, prd_id):
+        self.calls.append(("apply_draft_deleted", prd_id))
+        return RunResult(prd_id, Stage.AWAITING_REVIEW)
+
 
 @dataclass
 class FakeComposition:
@@ -207,16 +211,26 @@ def test_find_prd_by_ticket_resolves_across_ticket_fields() -> None:
 class FakeConfluenceForVersion:
     """Returns the page's authoritative version, as `_resolve_version` fetches it."""
 
-    def __init__(self, version: int = 7, title: str = "final_PRD_Widget") -> None:
+    def __init__(
+        self,
+        version: int = 7,
+        title: str = "final_PRD_Widget",
+        parent_id: str = "folder-source-1",
+        ancestors: tuple[str, ...] = ("folder-source-1",),
+    ) -> None:
         self.version, self.title, self.calls = version, title, 0
+        self.parent_id, self.ancestors = parent_id, ancestors
 
     async def get_page(self, page_id, *, with_body=True):
         from app.domain.atlassian import ConfluencePage
 
         self.calls += 1
         return ConfluencePage(
-            id=page_id, title=self.title, version=self.version, parent_id="folder-source-1"
+            id=page_id, title=self.title, version=self.version, parent_id=self.parent_id
         )
+
+    async def get_page_ancestors(self, page_id):
+        return self.ancestors
 
 
 def make_with_confluence(version: int = 7, tenant_state: PrdState | None = None):
@@ -266,17 +280,56 @@ async def test_a_redelivery_of_the_same_unversioned_event_is_dropped() -> None:
     assert composition.orchestrator.calls == [], "the duplicate started a second run"
 
 
-async def test_a_later_edit_of_the_same_page_re_enters(tmp_path) -> None:
-    """EH-04: a rename arrives as a NEW version and must re-enter, not be swallowed as a duplicate."""
-    composition, tenant, confluence = make_with_confluence(version=7)
+async def test_a_rename_correction_re_enters_a_run_awaiting_the_rename(tmp_path) -> None:
+    """EH-04 / FR-02a: a run parked awaiting a corrected upload MUST re-enter when the page is renamed.
+
+    This is the one existing-run case where a source-page event is actionable — the guard keys on the
+    `UPLOADING_PM_RENAME` gate exactly to preserve it.
+    """
+    from app.domain.stage import PendingGate
+
+    parked = PrdState(
+        prd_id="page-1",
+        project_id="tenant_one",
+        stage=Stage.DETECTED,
+        pending_gate=PendingGate.UPLOADING_PM_RENAME,
+    )
+    composition, tenant, confluence = make_with_confluence(version=8, tenant_state=parked)
 
     await _dispatch(composition, Accepted(event=unversioned_page_event(), tenant=tenant))
-    composition.orchestrator.calls.clear()
 
-    confluence.version = 8  # the page was renamed → new version
+    assert ("advance", "page-1") in composition.orchestrator.calls, (
+        "the rename correction re-enters"
+    )
+
+
+async def test_a_rename_after_drafting_is_ignored(tmp_path) -> None:
+    """FR-01a rename-churn guard: once past the rename waits, toggling the name is a no-op.
+
+    The reported fear — the agent catching the same PRD over and over, producing duplicate tickets and
+    drafts, as the name is corrected back and forth. A run in review must not re-enter on a rename, and
+    must not even pay for the version-resolving GET.
+    """
+    from app.domain.stage import PendingGate
+
+    drafted = PrdState(
+        prd_id="page-1",
+        project_id="tenant_one",
+        stage=Stage.AWAITING_REVIEW,
+        pending_gate=PendingGate.PM_REVIEW,
+        review_ticket_key="TESTREV-1",
+        userdoc_page_id="draft-1",
+    )
+    composition, tenant, confluence = make_with_confluence(version=9, tenant_state=drafted)
+
     await _dispatch(composition, Accepted(event=unversioned_page_event(), tenant=tenant))
 
-    assert ("advance", "page-1") in composition.orchestrator.calls, "the rename did not re-enter"
+    assert composition.orchestrator.calls == [], (
+        "a rename after drafting must not re-enter the flow"
+    )
+    assert confluence.calls == 0, (
+        "the churn guard must short-circuit before the version-resolving GET"
+    )
 
 
 # -- AD-10 at the door: a space-wide Automation rule also fires on the agent's own pages ---------
@@ -339,11 +392,74 @@ async def test_a_real_prd_in_the_source_folder_is_still_admitted() -> None:
     assert ("advance", "page-1") in composition.orchestrator.calls
 
 
-async def test_a_page_with_an_unknown_container_is_left_to_detection() -> None:
-    """Nested pages have a page (not a folder) as parent — admit and let detection decide."""
-    composition, tenant, _ = make_with_confluence(version=3)
-    event = agent_page_event(container_id="some-other-page")
+async def test_a_nested_prd_under_the_source_folder_is_admitted() -> None:
+    """A PRD nested under a page inside the source folder has a page (not the folder) as its parent;
+    the ancestors lookup must still recognise it as in-source and admit it."""
+    composition, tenant, confluence = make_with_confluence(version=3)
+    confluence.ancestors = ("parent-page", "folder-source-1")  # source is an ancestor
+    event = agent_page_event(container_id="parent-page")
 
     await _dispatch(composition, Accepted(event=event, tenant=tenant))
 
-    assert composition.repository.state.get("draft-1") is not None
+    assert composition.repository.state.get("draft-1") is not None, (
+        "a nested source PRD is admitted"
+    )
+
+
+async def test_a_page_in_an_unrelated_folder_is_not_admitted() -> None:
+    """The source-folder gate: a page created elsewhere in the space must NOT become a dead run."""
+    composition, tenant, confluence = make_with_confluence(version=3)
+    confluence.ancestors = ("some-other-folder",)  # source is nowhere in the ancestry
+    event = agent_page_event(container_id="some-other-folder")
+
+    await _dispatch(composition, Accepted(event=event, tenant=tenant))
+
+    assert composition.repository.state.get("draft-1") is None, "a non-source page is refused"
+    assert composition.orchestrator.calls == []
+
+
+# -- FR-16: a trashed draft page routes to recovery --------------------------------------------
+
+
+def trashed_event(page_id="draft-1"):
+    from app.domain.events import ConfluencePageEvent, EventType
+
+    return ConfluencePageEvent(
+        event_type=EventType.CONFLUENCE_PAGE_TRASHED,
+        page_id=page_id,
+        version_number=None,
+        title="",
+    )
+
+
+async def test_a_trashed_draft_page_routes_to_recovery() -> None:
+    """The trashed page belongs to a run (by userdoc_page_id) → apply_draft_deleted."""
+    state = PrdState(
+        prd_id="page-1",
+        project_id="tenant_one",
+        stage=Stage.AWAITING_REVIEW,
+        review_ticket_key="TESTREV-1",
+        userdoc_page_id="draft-1",
+    )
+    composition, tenant = make(state)
+
+    await _dispatch(composition, Accepted(event=trashed_event("draft-1"), tenant=tenant))
+
+    assert ("apply_draft_deleted", "page-1") in composition.orchestrator.calls
+
+
+async def test_a_trashed_page_that_is_not_a_tracked_draft_is_ignored() -> None:
+    state = PrdState(
+        prd_id="page-1",
+        project_id="tenant_one",
+        stage=Stage.AWAITING_REVIEW,
+        review_ticket_key="TESTREV-1",
+        userdoc_page_id="draft-1",
+    )
+    composition, tenant = make(state)
+
+    await _dispatch(
+        composition, Accepted(event=trashed_event("some-unrelated-page"), tenant=tenant)
+    )
+
+    assert composition.orchestrator.calls == [], "a non-draft deletion must not touch any run"

@@ -23,6 +23,7 @@ from app.adapters.confluence import ConfluenceAdapter
 from app.config.constants import PRD_CORRELATION_PROPERTY
 from app.config.schema import TenantConfig
 from app.domain.atlassian import ConfluencePage
+from app.domain.errors import AgentError
 from app.domain.state import utc_now
 
 
@@ -31,6 +32,19 @@ class PublishedDraft:
     page: ConfluencePage
     created: bool
     """False when an existing draft for this run was adopted rather than created (AD-11)."""
+
+
+@dataclass(frozen=True, slots=True)
+class DraftRecovery:
+    """The outcome of an FR-16 draft-deletion recovery attempt."""
+
+    action: str
+    """``healthy`` (the page was fine — a stale/duplicate event or already restored), ``restored``
+    (untrashed in place, same id, the ticket link still works), ``recreated`` (a new page holds the
+    last content — `page_id` changed), or ``unrecoverable`` (purged/unreadable — a human must act)."""
+
+    page_id: str | None
+    """The live page id after recovery — a NEW id when ``recreated``, else the original."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +127,50 @@ class Publisher:
         return await self._confluence.update_page(
             page_id=page_id, title=title, body_storage=storage, version=page.version
         )
+
+    async def recover_draft(
+        self, *, tenant: TenantConfig, prd_id: str, page_id: str
+    ) -> DraftRecovery:
+        """Restore or recreate a UserDoc draft that was deleted mid-flow (FR-16).
+
+        Fully idempotent, so it is safe to call on every deletion event, on a `publishing` resume, or
+        twice on a redelivery:
+
+        1. read the page — if it is already ``current``, the deletion was undone or the event is
+           stale → ``healthy``, no change;
+        2. if ``trashed``, try restore-from-trash (same id → the review-ticket link still works), then
+           re-move it into the draft folder (restore drops folder placement);
+        3. if the restore fails, recreate a new page from the content read in step 1 (trashed pages
+           are still readable) — the ``exact same content as the latest version`` — stamp it and place
+           it in the draft folder; the page id changes, so the caller repoints the state;
+        4. if the page cannot be read at all (purged), it is ``unrecoverable`` — a human must restore
+           it or the run must be re-drafted.
+        """
+        try:
+            page = await self._confluence.get_page(page_id)
+        except AgentError:
+            return DraftRecovery(action="unrecoverable", page_id=None)
+
+        if not page.is_trashed:
+            return DraftRecovery(action="healthy", page_id=page_id)
+
+        try:
+            await self._confluence.restore_page(page_id, title=page.title, version=page.version)
+            await self._confluence.move_page(page_id, tenant.confluence_draft_folder_id)
+            return DraftRecovery(action="restored", page_id=page_id)
+        except AgentError:
+            # Restore failed (purge, plan limit, race). Recreate from the content we just read.
+            space_id = page.space_id or await self._draft_space_id(tenant)
+            recreated = await self._confluence.create_page(
+                space_id=space_id, title=page.title, body_storage=page.body_storage
+            )
+            await self._stamp(recreated.id, prd_id)
+            await self._confluence.move_page(recreated.id, tenant.confluence_draft_folder_id)
+            return DraftRecovery(action="recreated", page_id=recreated.id)
+
+    async def _draft_space_id(self, tenant: TenantConfig) -> str:
+        folder = await self._confluence.get_folder(tenant.confluence_draft_folder_id)
+        return str(folder.get("spaceId") or "")
 
     async def _stamp(self, page_id: str, prd_id: str) -> None:
         """AD-10 + AD-11 — mark the page as agent output and carry the correlation marker.

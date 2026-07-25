@@ -528,3 +528,27 @@ def test_a_resolved_version_restores_a_distinct_key_per_edit() -> None:
 
     assert v2.value != v3.value
     assert v2.version_marker == "2" and v3.version_marker == "3"
+
+
+# -- FR-16: a page-trashed event parses to the trashed event type ------------------------------
+
+
+def test_a_page_trashed_payload_parses_as_a_trashed_event() -> None:
+    from app.domain.events import EventType
+    from app.webhooks.events import parse_event
+
+    for name in ("page_trashed", "page_removed", "page_deleted"):
+        event = parse_event({"webhookEvent": name, "page": {"id": "draft-1"}})
+        assert event.event_type is EventType.CONFLUENCE_PAGE_TRASHED
+        assert event.is_trashed_event
+        assert event.page_id == "draft-1"
+
+
+def test_first_traverses_a_list_index() -> None:
+    """The ancestors.0.id container fallback must actually resolve (was dead code)."""
+    from app.webhooks.events import _first
+
+    payload = {"page": {"ancestors": [{"id": "folder-9"}, {"id": "space-root"}]}}
+    assert _first(payload, "page.ancestors.0.id") == "folder-9"
+    assert _first(payload, "page.ancestors.1.id") == "space-root"
+    assert _first(payload, "page.ancestors.5.id") is None
