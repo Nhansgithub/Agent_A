@@ -326,3 +326,47 @@ def test_dedupe_keys_projection_is_empty_before_any_event_is_recorded(repo, stat
     """§10 `dedupe_keys` is a read-only view of `processed_events`, never a second store (AD-9)."""
     assert repo.dedupe_keys_for("page-1") == ()
     assert repo.with_dedupe_keys(state).dedupe_keys == ()
+
+
+def test_open_migrates_a_store_created_before_pending_deletion_page_id(tmp_path) -> None:
+    """FR-16: the live Droplet store predates this column. CREATE TABLE IF NOT EXISTS won't add it,
+    so Database must ALTER it in on an existing store — otherwise every write would fail there."""
+    import sqlite3
+
+    db_path = tmp_path / "old.db"
+    # Simulate the pre-migration schema: prd_state WITHOUT pending_deletion_page_id.
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE prd_state (
+            prd_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, stage TEXT NOT NULL,
+            pending_gate TEXT NOT NULL, queue_status TEXT NOT NULL, last_good_checkpoint TEXT,
+            prd_tracking_ticket_key TEXT, review_ticket_key TEXT, publishing_ticket_key TEXT,
+            rename_request_ticket_key TEXT, userdoc_page_id TEXT, prd_title TEXT,
+            review_round INTEGER NOT NULL DEFAULT 0, md_export_path TEXT, pending_feedback TEXT,
+            restriction_applied_at TEXT, moved_to_published_at TEXT, md_exported_at TEXT,
+            correlation_id TEXT NOT NULL, last_error TEXT, liveness_alerted_at TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+        );
+        INSERT INTO prd_state (prd_id, project_id, stage, pending_gate, queue_status,
+            correlation_id, created_at, updated_at)
+        VALUES ('old-1', 'tenant_one', 'awaiting_review', 'pm_review', 'idle',
+            'corr', '2026-07-25T00:00:00+00:00', '2026-07-25T00:00:00+00:00');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Opening it applies the additive migration.
+    db = Database(db_path)
+    repo = StateRepository(db)
+
+    cols = {r["name"] for r in db._connection.execute("PRAGMA table_info(prd_state)")}
+    assert "pending_deletion_page_id" in cols, "the column was added to the existing store"
+
+    # The pre-existing row still loads, with the new field defaulting to None.
+    assert repo.require("old-1").pending_deletion_page_id is None
+    # And the new field can now be written and read back.
+    repo.update_fields("old-1", pending_deletion_page_id="draft-9")
+    assert repo.require("old-1").pending_deletion_page_id == "draft-9"
+    db.close()

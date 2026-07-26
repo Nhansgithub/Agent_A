@@ -488,3 +488,41 @@ async def test_plain_feedback_while_awaiting_clarification_re_restates() -> None
         "clarification → structure-confirm"
     )
     assert result.error is None
+
+
+# -- FR-16: classifying the PM's answer to "was the deletion intentional?" ----------------------
+
+
+async def test_classify_deletion_reply_maps_intent() -> None:
+    from app.agents.llm import LlmClient
+    from app.domain.feedback import DeletionDecision
+    from tests.test_llm_client import FakeAnthropic
+
+    cases = {
+        "RESTORE": DeletionDecision.RESTORE,
+        "restore it, that was an accident": DeletionDecision.RESTORE,
+        "LEAVE": DeletionDecision.LEAVE,
+        "hmm not sure": DeletionDecision.UNCLEAR,
+    }
+    for reply, expected in cases.items():
+        interp = FeedbackInterpreter(LlmClient("k", client=FakeAnthropic(text=reply)), model="m")
+        got = await interp.classify_deletion_reply(
+            comment_text="(the PM's reply)",
+            metadata=CallMetadata(
+                correlation_id="c", prd_id="p", agent_role="feedback_interpreter"
+            ),
+        )
+        assert got is expected, f"{reply!r} -> {got}"
+
+
+async def test_classify_deletion_reply_defaults_to_unclear_on_gibberish() -> None:
+    from app.agents.llm import LlmClient
+    from app.domain.feedback import DeletionDecision
+    from tests.test_llm_client import FakeAnthropic
+
+    interp = FeedbackInterpreter(LlmClient("k", client=FakeAnthropic(text="banana")), model="m")
+    got = await interp.classify_deletion_reply(
+        comment_text="?",
+        metadata=CallMetadata(correlation_id="c", prd_id="p", agent_role="feedback_interpreter"),
+    )
+    assert got is DeletionDecision.UNCLEAR, "never guess RESTORE/LEAVE from an unrecognised answer"

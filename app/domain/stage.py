@@ -54,6 +54,10 @@ class PendingGate(StrEnum):
     PM_CLARIFICATION = "pm_clarification"
     """FR-08 — a clarifying question is outstanding; the agent must not proceed (EH-08)."""
 
+    PM_DELETION_DECISION = "pm_deletion_decision"
+    """FR-16 — the UserDoc draft was deleted; the agent has asked the Reviewer PM whether it was
+    intentional and is waiting for their answer before recovering (or leaving) it."""
+
     PM_STRUCTURE_CONFIRM = "pm_structure_confirm"
     """FR-10 — plain-language feedback was restated; awaiting the PM's confirmation (EH-08)."""
 

@@ -359,7 +359,7 @@ Confluence Cloud has no equivalent admin webhook screen, so use **Automation** r
 |---|---|---|
 | **PRD created** | *Page created* | starts a run when a `final_PRD_*` page appears |
 | **PRD renamed** | *Page updated* | how a mis-named PRD re-enters the flow after it's corrected (FR-02a/EH-04) |
-| **Draft deleted** | *Page trashed* (a.k.a. *Page removed/deleted*) | lets the agent detect and recover a deleted UserDoc draft (FR-16) |
+| **Draft deleted** | *Page trashed* (a.k.a. *Page removed/deleted*) | lets the agent detect a deleted UserDoc draft and **ask the PM whether to restore it** (FR-16) |
 
 For **each** rule:
 
@@ -388,10 +388,16 @@ For **each** rule:
 > unrelated pages. It is defense-in-depth only — the agent already refuses any page outside the source
 > folder and any page it created itself.
 
+> **The Draft-deleted rule is forgiving.** The agent checks a page's real *status*, so even if your
+> deletion rule fires as *page updated* (some spaces do), a trashed draft is still detected — as long
+> as the rule sends the page **id**. What it does on a deletion is **ask the Reviewer PM** on the
+> Review ticket whether it was intentional; it restores the draft **only** if the PM replies that it
+> was a mistake. It never auto-restores a page someone may have deleted on purpose.
+
 > **If a webhook is silently dropped** — Atlassian delivery is best-effort — the scheduled liveness
-> check catches a missed *gate* transition, and a missed *deletion* is caught at publish time (the
-> publisher recreates a missing draft rather than failing). Neither is a substitute for correct
-> configuration.
+> check catches a missed *gate* transition. A missed *deletion* surfaces at publish time as an
+> actionable error (the agent refuses to publish a missing draft and tells the human to restore it),
+> not a silent auto-recovery.
 
 ---
 

@@ -71,6 +71,13 @@ class PrdState:
     Persisted (not held in memory) so a crash between confirming feedback and applying it resumes
     correctly rather than losing the PM's input (AD-11)."""
 
+    pending_deletion_page_id: str | None = None
+    """FR-16 — set to the deleted draft's page id when a deletion has been detected and the agent has
+    asked the Reviewer PM whether it was intentional. While set, the run is awaiting the PM's
+    decision (`pending_gate = PM_DELETION_DECISION`) and a PM comment routes to the deletion-decision
+    handler rather than the feedback loop. The agent recovers the draft **only** if the PM confirms it
+    was a mistake — it never auto-recovers."""
+
     # --- AD-18 publish sub-checkpoints ---------------------------------------------------------
     # The publish transaction's four side-effects are individually guarded so resuming the
     # `publishing` stage skips what already succeeded and never re-applies it.

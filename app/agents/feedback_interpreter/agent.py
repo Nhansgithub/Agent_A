@@ -18,6 +18,7 @@ from app.agents.skills import load_skill
 from app.domain.errors import AgentError
 from app.domain.feedback import (
     ClarificationTrigger,
+    DeletionDecision,
     FeedbackDecision,
     FeedbackRoute,
     ReviewTurn,
@@ -112,6 +113,42 @@ class FeedbackInterpreter:
             f"Source PRD (Markdown, truncated):\n---\n{prd[:12000]}\n---\n\n"
             "Classify this comment per your rubric. Respond with only the JSON object."
         )
+
+    async def classify_deletion_reply(
+        self, *, comment_text: str, metadata: CallMetadata
+    ) -> DeletionDecision:
+        """Interpret the PM's answer to 'was deleting the draft intentional?' (FR-16).
+
+        Returns a typed decision the orchestrator routes on deterministically (AD-16). Ambiguity is
+        never resolved by guessing — an unclear reply returns UNCLEAR and the agent re-asks, because
+        both wrong actions (restoring an intentional delete, or abandoning a mistaken one) are bad.
+        """
+        prompt = (
+            "You asked the Reviewer PM whether deleting the UserDoc draft page was intentional. "
+            "Read their reply and decide what they want:\n"
+            "- RESTORE  — it was a mistake / an accident / they want it back / 'restore it' / 'yes "
+            "bring it back' / 'no I didn't mean to'.\n"
+            "- LEAVE    — it was intentional / on purpose / they want it to stay deleted / 'yes I "
+            "meant to' / 'leave it'.\n"
+            "- UNCLEAR  — the reply does not clearly indicate either (a question, off-topic, or "
+            "genuinely ambiguous).\n\n"
+            f"PM reply:\n---\n{comment_text.strip() or '(empty)'}\n---\n\n"
+            "Respond with ONLY one word: RESTORE, LEAVE, or UNCLEAR."
+        )
+        response = await self._llm.complete(
+            model=self._model,
+            system=(
+                "You classify a short human reply into exactly one of RESTORE, LEAVE, or UNCLEAR. "
+                "When in doubt, choose UNCLEAR — never guess between RESTORE and LEAVE."
+            ),
+            prompt=prompt,
+            metadata=metadata,
+        )
+        token = "".join(ch for ch in response.text.strip().lower() if ch.isalpha())
+        for decision in (DeletionDecision.RESTORE, DeletionDecision.LEAVE):
+            if decision.value in token:
+                return decision
+        return DeletionDecision.UNCLEAR
 
     @staticmethod
     def _parse(text: str) -> FeedbackDecision:

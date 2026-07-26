@@ -203,6 +203,22 @@ class RunContext:
             tenant=self.tenant, prd_id=self.prd_id, page_id=page_id
         )
 
+    async def draft_status(self, page_id: str) -> str:
+        """The current Confluence status of a page: ``current``, ``trashed``, or ``missing`` (FR-16)."""
+        from app.domain.errors import AgentError
+
+        try:
+            page = await self.confluence.get_page(page_id, with_body=False)
+        except AgentError:
+            return "missing"
+        return page.status
+
+    async def classify_deletion_reply(self, comment_text: str, metadata: CallMetadata):
+        """FR-16 — interpret the PM's 'was it intentional?' answer into a typed DeletionDecision."""
+        return await self.feedback_interpreter.classify_deletion_reply(
+            comment_text=comment_text, metadata=metadata
+        )
+
     async def post_comment(self, issue_key: str, body: dict) -> None:
         """Post an agent comment and immediately claim its id in `processed_events` (AD-9, AD-10).
 

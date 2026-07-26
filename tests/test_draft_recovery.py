@@ -14,6 +14,7 @@ from app.agents.publisher import DraftRecovery, Publisher
 from app.domain import adf
 from app.domain.atlassian import ConfluencePage
 from app.domain.errors import AgentError
+from app.domain.feedback import DeletionDecision
 from app.domain.stage import PendingGate, Stage
 from app.domain.state import PrdState
 from app.orchestrator.runner import Orchestrator
@@ -137,14 +138,19 @@ async def test_recover_reports_unrecoverable_when_the_page_is_purged() -> None:
 
 
 # ---------------------------------------------------------------------------------------------
-# Orchestrator.apply_draft_deleted — recover + @mention the PM + self-heal an errored run.
+# Orchestrator — ASK FIRST (apply_draft_deleted), then recover only on the PM's confirmation
+# (apply_deletion_decision). Never auto-recover.
 # ---------------------------------------------------------------------------------------------
 
 
 @dataclass
 class FakeRecoveryContext:
     repository: Repository
-    recovery: DraftRecovery
+    recovery: DraftRecovery = field(
+        default_factory=lambda: DraftRecovery(action="restored", page_id="draft-1")
+    )
+    decision: DeletionDecision = DeletionDecision.RESTORE
+    status: str = "trashed"
     prd_id: str = "page-1"
     correlation_id: str = "corr-1"
     tenant: TenantConfig = TENANT
@@ -153,14 +159,20 @@ class FakeRecoveryContext:
     def draft_page_url(self, page_id):
         return f"https://x/{page_id}"
 
+    async def draft_status(self, page_id):
+        return self.status
+
     async def recover_draft(self):
         return self.recovery
+
+    async def classify_deletion_reply(self, comment_text, metadata):
+        return self.decision
 
     async def post_comment(self, issue_key, body):
         self.comments.append((issue_key, body))
 
 
-def build(recovery: DraftRecovery, *, stage=Stage.AWAITING_REVIEW, **state_kwargs):
+def build(*, stage=Stage.AWAITING_REVIEW, handlers=None, **state_kwargs):
     repository = Repository(Database(":memory:"))
     repository.state.create(
         PrdState(
@@ -173,89 +185,121 @@ def build(recovery: DraftRecovery, *, stage=Stage.AWAITING_REVIEW, **state_kwarg
             **state_kwargs,
         )
     )
-    context = FakeRecoveryContext(repository=repository, recovery=recovery)
-    orchestrator = Orchestrator(repository, HandlerRegistry({}), context_factory=lambda _s: context)
+    context = FakeRecoveryContext(repository=repository)
+    orchestrator = Orchestrator(
+        repository, HandlerRegistry(handlers or {}), context_factory=lambda _s: context
+    )
     return orchestrator, repository, context
 
 
-async def test_apply_draft_deleted_restores_and_alerts_the_pm() -> None:
-    orchestrator, repository, context = build(DraftRecovery(action="restored", page_id="draft-1"))
+# -- the ASK phase ------------------------------------------------------------------------------
 
-    result = await orchestrator.apply_draft_deleted("page-1")
 
-    assert result.final_stage is Stage.AWAITING_REVIEW, "stays where it was; the page is back"
-    assert context.comments, "the PM was notified"
+async def test_a_deleted_draft_asks_the_pm_and_does_not_auto_recover() -> None:
+    orchestrator, repository, context = build()
+    context.status = "trashed"
+
+    result = await orchestrator.apply_draft_deleted("page-1", "draft-1")
+
+    assert context.comments, "the PM was asked"
     body = context.comments[-1][1]
     assert context.comments[-1][0] == "TESTREV-1"
-    assert "restored it from the trash" in adf.extract_text(body)
-    assert "mention" in str(body), "the PM must be @-mentioned, or they aren't notified"
+    assert "was that intentional" in adf.extract_text(body).lower()
+    assert "mention" in str(body), "the PM must be @-mentioned"
+    final = repository.state.require("page-1")
+    assert final.pending_deletion_page_id == "draft-1", "parked awaiting the decision"
+    assert final.pending_gate is PendingGate.PM_DELETION_DECISION
+    assert "asked the PM" in result.stopped_reason
 
 
-async def test_apply_draft_deleted_repoints_state_on_recreate() -> None:
-    orchestrator, repository, context = build(
-        DraftRecovery(action="recreated", page_id="recreated-901")
-    )
+async def test_a_stale_deletion_event_when_the_page_is_current_is_ignored() -> None:
+    orchestrator, repository, context = build()
+    context.status = "current"  # not actually deleted
 
-    await orchestrator.apply_draft_deleted("page-1")
+    await orchestrator.apply_draft_deleted("page-1", "draft-1")
 
-    assert repository.state.require("page-1").userdoc_page_id == "recreated-901", "state repointed"
-    assert "recreated it" in adf.extract_text(context.comments[-1][1])
-
-
-async def test_apply_draft_deleted_is_a_no_op_when_healthy() -> None:
-    orchestrator, repository, context = build(DraftRecovery(action="healthy", page_id="draft-1"))
-
-    result = await orchestrator.apply_draft_deleted("page-1")
-
-    assert context.comments == [], "no noise when nothing was actually deleted"
-    assert "intact" in result.stopped_reason
+    assert context.comments == [], "no question when the page is fine"
+    assert repository.state.require("page-1").pending_deletion_page_id is None
 
 
-async def test_apply_draft_deleted_self_heals_an_errored_run() -> None:
-    """The whole point: a run that errored because the page was gone recovers itself once it's back."""
-    handlers_ran: list[str] = []
+async def test_asking_twice_for_the_same_page_is_idempotent() -> None:
+    orchestrator, repository, context = build(pending_deletion_page_id="draft-1")
+
+    await orchestrator.apply_draft_deleted("page-1", "draft-1")
+
+    assert context.comments == [], "already asked — do not ask again"
+
+
+# -- the DECISION phase -------------------------------------------------------------------------
+
+
+async def test_pm_confirms_mistake_restores_the_draft() -> None:
+    orchestrator, repository, context = build(pending_deletion_page_id="draft-1")
+    context.decision = DeletionDecision.RESTORE
+    context.recovery = DraftRecovery(action="restored", page_id="draft-1")
+
+    result = await orchestrator.apply_deletion_decision("page-1", comment_text="oops, restore it")
+
+    assert "restored the draft" in adf.extract_text(context.comments[-1][1])
+    final = repository.state.require("page-1")
+    assert final.pending_deletion_page_id is None, "the wait is cleared"
+    assert final.pending_gate is PendingGate.PM_REVIEW, "back to the natural gate"
+    assert result.error is None
+
+
+async def test_pm_says_intentional_leaves_it_deleted() -> None:
+    orchestrator, repository, context = build(pending_deletion_page_id="draft-1")
+    context.decision = DeletionDecision.LEAVE
+
+    await orchestrator.apply_deletion_decision("page-1", comment_text="yes, I meant to delete it")
+
+    text = adf.extract_text(context.comments[-1][1]).lower()
+    assert "leave the draft deleted" in text or "won't restore" in text
+    final = repository.state.require("page-1")
+    assert final.pending_deletion_page_id is None, "no longer waiting"
+
+
+async def test_an_unclear_reply_re_asks_and_keeps_waiting() -> None:
+    orchestrator, repository, context = build(pending_deletion_page_id="draft-1")
+    context.decision = DeletionDecision.UNCLEAR
+
+    await orchestrator.apply_deletion_decision("page-1", comment_text="hmm what do you mean")
+
+    assert "couldn't tell" in adf.extract_text(context.comments[-1][1]).lower()
+    assert repository.state.require("page-1").pending_deletion_page_id == "draft-1", "still waiting"
+
+
+async def test_confirming_a_mistake_self_heals_an_errored_run() -> None:
+    """A run that errored because the page was gone recovers itself once the PM confirms it was a
+    mistake and the draft is restored."""
+    ran: list[str] = []
 
     async def on_publishing(context, state):
-        handlers_ran.append("publishing")
+        ran.append("publishing")
         from app.orchestrator.stages import Advance
 
         return Advance(to_stage=Stage.COMPLETE, note="published")
 
-    repository = Repository(Database(":memory:"))
-    repository.state.create(
-        PrdState(
-            prd_id="page-1",
-            project_id="tenant_one",
-            stage=Stage.ERROR,
-            last_good_checkpoint=Stage.PUBLISHING,
-            userdoc_page_id="draft-1",
-            review_ticket_key="TESTREV-1",
-            publishing_ticket_key="TESTMAIN-2",
-        )
-    )
-    context = FakeRecoveryContext(
-        repository=repository, recovery=DraftRecovery(action="restored", page_id="draft-1")
-    )
-    orchestrator = Orchestrator(
-        repository,
-        HandlerRegistry({Stage.PUBLISHING: on_publishing}),
-        context_factory=lambda _s: context,
-    )
-
-    result = await orchestrator.apply_draft_deleted("page-1")
-
-    assert handlers_ran == ["publishing"], "re-entered at the failed checkpoint and ran it"
-    assert result.final_stage is Stage.COMPLETE, "the errored run self-recovered to completion"
-
-
-async def test_apply_draft_deleted_unrecoverable_alerts_but_does_not_resume() -> None:
     orchestrator, repository, context = build(
-        DraftRecovery(action="unrecoverable", page_id=None),
         stage=Stage.ERROR,
         last_good_checkpoint=Stage.PUBLISHING,
+        pending_deletion_page_id="draft-1",
+        publishing_ticket_key="TESTMAIN-2",
+        handlers={Stage.PUBLISHING: on_publishing},
     )
+    context.decision = DeletionDecision.RESTORE
+    context.recovery = DraftRecovery(action="restored", page_id="draft-1")
 
-    result = await orchestrator.apply_draft_deleted("page-1")
+    result = await orchestrator.apply_deletion_decision("page-1", comment_text="restore please")
 
-    assert "could not recover it" in adf.extract_text(context.comments[-1][1])
-    assert result.final_stage is Stage.ERROR, "cannot self-heal what it cannot recover"
+    assert ran == ["publishing"], "re-entered the failed checkpoint after restoring"
+    assert result.final_stage is Stage.COMPLETE
+
+
+async def test_a_decision_reply_with_no_pending_deletion_is_a_no_op() -> None:
+    orchestrator, repository, context = build()  # no pending_deletion_page_id
+
+    result = await orchestrator.apply_deletion_decision("page-1", comment_text="restore")
+
+    assert context.comments == []
+    assert "no deletion decision pending" in result.stopped_reason

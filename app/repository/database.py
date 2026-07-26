@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS prd_state (
     review_round              INTEGER NOT NULL DEFAULT 0,
     md_export_path            TEXT,
     pending_feedback          TEXT,
+    pending_deletion_page_id  TEXT,
     restriction_applied_at    TEXT,
     moved_to_published_at     TEXT,
     md_exported_at            TEXT,
@@ -75,6 +76,14 @@ CREATE TABLE IF NOT EXISTS processed_events (
 
 CREATE INDEX IF NOT EXISTS idx_processed_events_prd ON processed_events (prd_id);
 """
+
+#: Columns added after the initial schema shipped. `CREATE TABLE IF NOT EXISTS` never alters an
+#: existing table, so an already-provisioned store (the Droplet's) would be missing these — they are
+#: added idempotently at open. Each entry is `column_name -> full column DDL`; all must be nullable
+#: (an existing row has no value for a new column).
+_ADDED_COLUMNS: dict[str, str] = {
+    "pending_deletion_page_id": "pending_deletion_page_id TEXT",  # FR-16
+}
 
 
 def to_iso(value: datetime | None) -> str | None:
@@ -123,6 +132,18 @@ class Database:
     def _apply_schema(self) -> None:
         with self._lock:
             self._connection.executescript(SCHEMA)
+            self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        """Idempotent additive migration for a store created before a column existed (AD-2/AD-23).
+
+        Additive-only and nullable, so it never rewrites data and is safe to run on every open — the
+        alternative (a versioned migration framework) is overkill for the demo's single table.
+        """
+        existing = {row["name"] for row in self._connection.execute("PRAGMA table_info(prd_state)")}
+        for name, ddl in _ADDED_COLUMNS.items():
+            if name not in existing:
+                self._connection.execute(f"ALTER TABLE prd_state ADD COLUMN {ddl}")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:

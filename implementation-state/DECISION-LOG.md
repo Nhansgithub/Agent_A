@@ -588,3 +588,30 @@ FR-08 trigger) → `IllegalStageTransition` → HTTP 500 (the D-31 class of bug)
 vote (org spend limit), so this was confirmed by reading the code directly.
 **Decision:** added both edges; the two review-loop waits are now fully interconnected. Self-
 transitions were already legal, so re-restate/re-clarify needed nothing.
+
+### D-38 · Draft-deletion recovery is human-gated (ask first), not automatic (FR-16 revised)  (2026-07-26, Nhan's change)
+**Context:** Nhan reported the deleted draft wasn't recovered despite the Automation firing, and — more
+importantly — changed the requirement: **do not auto-recover.** Instead, ask the reviewing PM whether
+the deletion was intentional; restore only if they confirm it was a mistake.
+**Bug found:** the deleted page (2064481, run 2195475's draft) arrived as a **page-updated** event, not
+page-trashed (the Automation body wasn't labelled), so it hit `_is_agent_output` (the draft carries the
+`agent-generated` label) and was dropped before the trash logic ran. Root cause: detection trusted the
+event *label* instead of the page's real *status*.
+**Decisions:**
+1. **Robust detection:** in `_dispatch_page`, a page event whose id is a run's `userdoc_page_id` is
+   checked by live *status*; if trashed/missing → the deletion flow, regardless of the event label.
+   (A healthy draft edit is ignored; a non-draft trash is ignored.)
+2. **Ask-first (AD-16/EH-08 spirit):** `apply_draft_deleted` posts a question on the Review ticket
+   (@mention PM), sets `pending_deletion_page_id` + `pending_gate = PM_DELETION_DECISION`, and does
+   **nothing else**. A PM comment while that marker is set routes to `apply_deletion_decision`, which
+   classifies the reply into a typed **RESTORE / LEAVE / UNCLEAR** (Feedback interpreter; deterministic
+   routing) — restore only on RESTORE, re-ask on UNCLEAR (never guess).
+3. **Publish stops auto-recovering:** `on_publishing` now *refuses* a missing/trashed draft with an
+   actionable error instead of silently restoring it — consistent with "never auto-recover."
+4. **Schema:** `pending_deletion_page_id` column + an idempotent additive migration (`ALTER TABLE …
+   ADD COLUMN` for a store that predates it — the live Droplet DB), since `CREATE TABLE IF NOT EXISTS`
+   never alters an existing table.
+**Rationale:** a deletion can be deliberate; auto-restoring would fight the human. Gating on the PM's
+confirmation matches how the clarification/structure loops already work. Keying on status (not the
+webhook label) makes it work with the user's existing, imperfectly-configured Automation rule.
+**Supersedes D-36's auto-recovery** (which was the prior FR-16 behavior).

@@ -115,6 +115,22 @@ async def _dispatch_page(composition: Composition, event: ConfluencePageEvent, t
     from app.domain.stage import PendingGate
     from app.domain.state import PrdState
 
+    # FR-16 robust deletion detection. A page event whose id is a run's OWN draft (userdoc_page_id)
+    # is never a new PRD — it is the agent's own page, which the AD-10 guard below would drop. But if
+    # that draft is now *trashed*, the event is a deletion signal we must act on. Crucially this
+    # catches a deletion even when the Automation rule fired a generic "page updated" (not
+    # "page trashed") — the common misconfiguration — because we check the page's real status rather
+    # than trusting the event label. A non-deletion event about the agent's own draft is ignored.
+    draft_owner = _find_prd_by_userdoc_page(repository, event.page_id)
+    if draft_owner is not None:
+        if event.is_trashed_event or await _page_is_trashed(composition, event.page_id, tenant):
+            logger.info(
+                "draft %s (run %s) is trashed; asking the PM (FR-16)", event.page_id, draft_owner
+            )
+            return await composition.orchestrator.apply_draft_deleted(draft_owner, event.page_id)
+        logger.info("page %s is the agent's own draft (not deleted); ignored", event.page_id)
+        return None
+
     # Rename-churn guard (FR-01a). A page's id is stable across renames, so an already-admitted PRD
     # keeps hitting this path every time its source page is renamed — and each rename is a new
     # Confluence version, i.e. a new dedupe key, so version-dedup alone would not stop it. The ONLY
@@ -198,8 +214,25 @@ async def _dispatch_page_trashed(composition: Composition, event: ConfluencePage
     if prd_id is None:
         logger.info("trashed page %s is not a tracked UserDoc draft; ignored", event.page_id)
         return None
-    logger.info("draft page %s for run %s was trashed; recovering (FR-16)", event.page_id, prd_id)
-    return await composition.orchestrator.apply_draft_deleted(prd_id)
+    logger.info(
+        "draft page %s for run %s was trashed; asking the PM (FR-16)", event.page_id, prd_id
+    )
+    return await composition.orchestrator.apply_draft_deleted(prd_id, event.page_id)
+
+
+async def _page_is_trashed(composition: Composition, page_id: str, tenant) -> bool:
+    """Is the page actually in the trash right now (FR-16)? — read the real status, don't trust labels.
+
+    A hard 404 means the page is gone (purged) → treat as deleted. A transient read error is **not**
+    a deletion, so we do not badger the PM over a blip (the adapter has already retried transients).
+    """
+    from app.domain.errors import AgentError
+
+    try:
+        page = await composition._adapters_for(tenant).confluence.get_page(page_id, with_body=False)
+    except AgentError as exc:
+        return exc.status_code == 404
+    return page.is_trashed
 
 
 def _find_prd_by_userdoc_page(repository, page_id: str) -> str | None:
@@ -294,6 +327,14 @@ async def _dispatch_comment(composition: Composition, event: JiraCommentEvent, t
     state = repository.state.get(prd_id)
     if state is None:
         return None
+
+    # A pending draft-deletion decision takes precedence over the feedback loop (FR-16): while the
+    # agent is waiting to hear whether a deletion was intentional, the PM's next comment is that
+    # answer, not draft feedback.
+    if state.pending_deletion_page_id:
+        return await composition.orchestrator.apply_deletion_decision(
+            prd_id, comment_text=event.body_text
+        )
 
     # An admin resume reply on an errored run (EH-02).
     if state.stage is Stage.ERROR and event.author_account_id == tenant.admin_account_id:

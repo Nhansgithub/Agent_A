@@ -41,8 +41,12 @@ class FakeOrchestrator:
         self.calls.append(("apply_admin_resume", prd_id))
         return RunResult(prd_id, Stage.CONFIRMED)
 
-    async def apply_draft_deleted(self, prd_id):
+    async def apply_draft_deleted(self, prd_id, deleted_page_id):
         self.calls.append(("apply_draft_deleted", prd_id))
+        return RunResult(prd_id, Stage.AWAITING_REVIEW)
+
+    async def apply_deletion_decision(self, prd_id, *, comment_text):
+        self.calls.append(("apply_deletion_decision", prd_id))
         return RunResult(prd_id, Stage.AWAITING_REVIEW)
 
 
@@ -217,16 +221,21 @@ class FakeConfluenceForVersion:
         title: str = "final_PRD_Widget",
         parent_id: str = "folder-source-1",
         ancestors: tuple[str, ...] = ("folder-source-1",),
+        status: str = "current",
     ) -> None:
         self.version, self.title, self.calls = version, title, 0
-        self.parent_id, self.ancestors = parent_id, ancestors
+        self.parent_id, self.ancestors, self.status = parent_id, ancestors, status
 
     async def get_page(self, page_id, *, with_body=True):
         from app.domain.atlassian import ConfluencePage
 
         self.calls += 1
         return ConfluencePage(
-            id=page_id, title=self.title, version=self.version, parent_id=self.parent_id
+            id=page_id,
+            title=self.title,
+            version=self.version,
+            parent_id=self.parent_id,
+            status=self.status,
         )
 
     async def get_page_ancestors(self, page_id):
@@ -463,3 +472,74 @@ async def test_a_trashed_page_that_is_not_a_tracked_draft_is_ignored() -> None:
     )
 
     assert composition.orchestrator.calls == [], "a non-draft deletion must not touch any run"
+
+
+async def test_a_draft_arriving_as_a_page_update_but_now_trashed_triggers_the_audit() -> None:
+    """The real bug: the Automation rule fires a generic 'page updated' (not 'page trashed') on a
+    delete, so the event isn't labelled a trash. The agent must check the page's real STATUS and act
+    on the deletion anyway — instead of dropping it via the AD-10 self-ingestion guard."""
+    state = PrdState(
+        prd_id="page-1",
+        project_id="tenant_one",
+        stage=Stage.AWAITING_REVIEW,
+        review_ticket_key="TESTREV-1",
+        userdoc_page_id="draft-1",
+    )
+    # A normal page_updated event for the draft; the live page reports status=trashed.
+    composition, tenant, confluence = make_with_confluence(tenant_state=state)
+    confluence.status = "trashed"
+    from app.domain.events import ConfluencePageEvent, EventType
+
+    event = ConfluencePageEvent(
+        event_type=EventType.CONFLUENCE_PAGE_UPDATED,
+        page_id="draft-1",
+        version_number=None,
+        title="",
+    )
+
+    await _dispatch(composition, Accepted(event=event, tenant=tenant))
+
+    assert ("apply_draft_deleted", "page-1") in composition.orchestrator.calls
+
+
+async def test_a_page_update_for_a_healthy_draft_is_ignored_not_admitted() -> None:
+    """A normal edit of the agent's own draft is not a new PRD and not a deletion — just ignore it."""
+    state = PrdState(
+        prd_id="page-1",
+        project_id="tenant_one",
+        stage=Stage.AWAITING_REVIEW,
+        review_ticket_key="TESTREV-1",
+        userdoc_page_id="draft-1",
+    )
+    composition, tenant, confluence = make_with_confluence(tenant_state=state)
+    confluence.status = "current"
+    from app.domain.events import ConfluencePageEvent, EventType
+
+    event = ConfluencePageEvent(
+        event_type=EventType.CONFLUENCE_PAGE_UPDATED,
+        page_id="draft-1",
+        version_number=None,
+        title="",
+    )
+
+    await _dispatch(composition, Accepted(event=event, tenant=tenant))
+
+    assert composition.orchestrator.calls == []
+    assert composition.repository.state.get("draft-1") is None, "the draft is not admitted as a PRD"
+
+
+async def test_a_pm_reply_while_a_deletion_is_pending_routes_to_the_decision() -> None:
+    state = PrdState(
+        prd_id="page-1",
+        project_id="tenant_one",
+        stage=Stage.AWAITING_REVIEW,
+        review_ticket_key="TESTREV-1",
+        userdoc_page_id="draft-1",
+        pending_deletion_page_id="draft-1",
+    )
+    composition, tenant = make(state)
+
+    await _dispatch(composition, Accepted(comment_event(body="restore it please"), tenant))
+
+    assert ("apply_deletion_decision", "page-1") in composition.orchestrator.calls
+    assert ("apply_pm_comment", "page-1") not in composition.orchestrator.calls

@@ -764,3 +764,30 @@ note; SETUP-GUIDE Part 7b (three Automation rules, Custom-data body).
 **Blocker noted:** the audit workflow was cut short by the org **monthly spend limit** — some verify
 agents didn't run. The confirmed findings are solid; a re-run for full verification is possible once
 the limit resets (`/usage-credits`).
+
+---
+
+## Session 5 — 2026-07-26 · FR-16 becomes human-gated (ask before recover) + the real bug
+
+**Reported:** deleted draft not recovered despite the Automation firing; and a requirement change —
+**never auto-recover**; ask the reviewing PM first, restore only on their confirmation of a mistake.
+
+**Bug (from the live logs):** the deleted draft (page 2064481, run 2195475) arrived as a *page-updated*
+event, not *page-trashed*, so `_is_agent_output` dropped it (the draft has the `agent-generated` label)
+before any trash logic. Detection trusted the event label, not the page's real status.
+
+**Built (D-38):**
+- Robust detection — a page event for a run's own draft is judged by live *status*; trashed/missing →
+  deletion flow, whatever the event label. Healthy draft edits and non-draft trashes are ignored.
+- Ask-first — `apply_draft_deleted` posts a question (@mention PM), parks with a
+  `pending_deletion_page_id` marker + `PM_DELETION_DECISION` gate; recovers nothing.
+- `apply_deletion_decision` — classifies the PM reply (RESTORE/LEAVE/UNCLEAR via the Feedback
+  interpreter), restores only on RESTORE, re-asks on UNCLEAR, self-heals an errored run on restore.
+- `on_publishing` no longer auto-recovers — it refuses a missing draft with an actionable error.
+- New `pending_deletion_page_id` column + idempotent additive DB migration (the live store predates it).
+
+**Tests:** 515 → 524. Rewrote the recovery tests for ask-first; added the robust-detection,
+comment-routing, migration, and classifier tests. Suite green, ruff clean, 5/5 contracts.
+
+**Docs:** PRD FR-16 and Spine AD-25 rewritten (human-gated); SETUP-GUIDE note updated (status-based
+detection; ask-first). Supersedes D-36's auto-recovery.

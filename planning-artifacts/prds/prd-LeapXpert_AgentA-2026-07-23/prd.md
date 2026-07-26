@@ -209,25 +209,32 @@ When the Publishing ticket is marked Done, the agent SHALL:
 3. **Export** the final UserDoc as a **Markdown file** to **server storage** (the running server's disk), for the later SSG step.
 4. Mark the flow **Complete** in the state store.
 
-> **Amendment 2026-07-25 (FR-16 — draft-deletion detection & recovery).** If the UserDoc **draft
-> page** is deleted (moved to trash) while a run is in flight — during review, structure-confirm,
-> clarification, revising, or while awaiting publish approval — the agent SHALL detect it (a
-> Confluence *page-trashed* Automation webhook), **not** stand still, and:
-> 1. **recover the artifact** — restore the page from trash in place (same id, so the review-ticket
->    link still works); if restore fails, **recreate** a new page holding the **exact latest content**
->    (read back from the still-readable trashed page) in the draft folder, stamped as agent output,
->    and repoint the run's `userdoc_page_id` to it;
-> 2. **notify the Reviewer PM** with a comment on the Review ticket, **@-mentioning** them, saying the
->    draft was deleted and what the agent did (restored / recreated with a new link / could not
->    recover — asking them to restore it or let the agent re-draft);
-> 3. if the run had already **errored** because the page was gone, **self-recover** by re-entering at
->    `last_good_checkpoint` now that the page is back.
->
-> The recovery is idempotent (a redelivered or stale deletion event finds the page healthy and is a
-> no-op) and is also applied **defensively at publish time**: the publish transaction recreates a
-> missing draft before restrict/move/export, so a deletion the webhook missed can no longer dead-end
-> `@agent resume` on a 404. A trashed page that is **not** a tracked draft (a source PRD, an unrelated
-> page) is ignored.
+> **Amendment 2026-07-26 (FR-16 — draft-deletion detection & human-gated recovery).** If the UserDoc
+> **draft page** is deleted (moved to trash) while a run is in flight, the agent SHALL detect it and
+> **ask the Reviewer PM before doing anything** — it must **never auto-recover**, because a deletion
+> may be deliberate.
+> 1. **Detect robustly.** Detection keys on the page's real *status*, not the webhook's label: a page
+>    event whose id is a run's own draft (`userdoc_page_id`) which is now `trashed`/missing is treated
+>    as a deletion — even if the Confluence Automation rule fired a generic *page-updated* rather than
+>    *page-trashed*. (A normal edit of the agent's own draft is ignored; a trashed page that is not any
+>    run's draft is ignored.)
+> 2. **Ask, don't act.** Post a question on the Review ticket, **@-mentioning the Reviewer PM**: *"the
+>    draft was deleted — was that intentional? Reply ‘restore’ and I'll bring it back exactly as it
+>    was, or ‘leave it’ to keep it deleted."* Park the run awaiting the answer
+>    (`pending_gate = PM_DELETION_DECISION`); the agent touches nothing until the PM replies.
+> 3. **Recover only on a confirmed mistake.** When the PM replies, interpret their intent (a typed
+>    RESTORE / LEAVE / UNCLEAR decision, routed deterministically per AD-16):
+>    - **RESTORE** → restore the page from trash in place (same id, so the ticket link survives); if
+>      that fails, **recreate** a new page holding the **exact latest content** (read back from the
+>      still-readable trashed page), repointing `userdoc_page_id`; confirm to the PM. If the run had
+>      **errored** because the page was gone, re-enter at `last_good_checkpoint` now that it is back.
+>    - **LEAVE** → acknowledge and leave the page deleted; the agent does not restore it.
+>    - **UNCLEAR** → re-ask; **never guess** between restore and leave.
+> This is a human-gated loop in the spirit of EH-08 / AD-16 (block on a human, never fabricate the
+> answer). Consequently the **publish transaction never auto-recovers** either: if the draft is
+> missing/trashed at publish time, the agent **refuses to publish** and raises an actionable error
+> (restore it, or reply ‘restore’ on the Review ticket, then resume) rather than silently restoring a
+> page a human deleted.
 
 ### 6.2 PM structured feedback format
 

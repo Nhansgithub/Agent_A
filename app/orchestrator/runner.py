@@ -26,8 +26,15 @@ from dataclasses import dataclass, field
 
 from app.agents.llm import CallMetadata
 from app.domain.errors import AgentError
-from app.domain.feedback import FeedbackRoute
-from app.domain.stage import PARKED_STAGES, TERMINAL_STAGES, PendingGate, QueueStatus, Stage
+from app.domain.feedback import DeletionDecision, FeedbackRoute
+from app.domain.stage import (
+    PARKED_STAGES,
+    TERMINAL_STAGES,
+    PendingGate,
+    QueueStatus,
+    Stage,
+    gate_for_stage,
+)
 from app.domain.state import PrdState
 from app.orchestrator.feedback_routing import FeedbackAction, route_feedback
 from app.orchestrator.graph import RECURSION_LIMIT, StageStep, build_graph
@@ -203,50 +210,171 @@ class Orchestrator:
             )
             return await self._advance_unlocked(prd_id)
 
-    async def apply_draft_deleted(self, prd_id: str) -> RunResult:
-        """FR-16 — a human deleted the run's UserDoc draft page mid-flow.
+    async def apply_draft_deleted(self, prd_id: str, deleted_page_id: str) -> RunResult:
+        """FR-16 — a human deleted the run's UserDoc draft page. **Ask the PM; do NOT auto-recover.**
 
-        The agent does not stand still: it restores the page from trash (or recreates it with the
-        last content), tells the PM on the review ticket, and — if the run had already errored because
-        the page was gone — re-enters at the failed stage so it self-recovers. Idempotent and under
-        the serial lock (AD-5): a redelivery finds the page already `healthy` and is a no-op.
+        The agent never silently restores a page a human deleted: it might have been deliberate. It
+        posts a question on the Review ticket (@-mentioning the PM) asking whether the deletion was
+        intentional, and parks awaiting the answer (`pending_gate = PM_DELETION_DECISION`). The reply
+        is handled by :meth:`apply_deletion_decision` — restore only on a confirmed mistake.
+
+        Idempotent: if a decision is already pending for this page, or the page is not actually
+        trashed (a stale/duplicate event), it is a no-op. Under the serial lock (AD-5).
         """
         async with self._lock:
             state = self._repository.state.require(prd_id)
-            if not state.userdoc_page_id:
-                return RunResult(prd_id, state.stage, stopped_reason="no draft page to recover")
+            if not state.userdoc_page_id or state.userdoc_page_id != deleted_page_id:
+                # Not this run's current draft (already recreated, or an unrelated page).
+                return RunResult(prd_id, state.stage, stopped_reason="not the run's current draft")
+            if state.pending_deletion_page_id == deleted_page_id:
+                return RunResult(
+                    prd_id, state.stage, stopped_reason="deletion decision already pending"
+                )
+
+            context = self._context_factory(state)
+            # Confirm it is really trashed before bothering the PM (guards a stale/duplicate event).
+            try:
+                status = await context.draft_status(deleted_page_id)
+            except AgentError as error:
+                return self._to_error(prd_id, state, error)
+            if status == "current":
+                return RunResult(prd_id, state.stage, stopped_reason="draft is not deleted")
+
+            if state.review_ticket_key:
+                await context.post_comment(
+                    state.review_ticket_key, self._deletion_question_body(context)
+                )
+            self._repository.state.update_fields(
+                prd_id,
+                pending_deletion_page_id=deleted_page_id,
+                pending_gate=PendingGate.PM_DELETION_DECISION,
+                queue_status=QueueStatus.IDLE,
+            )
+            logger.info(
+                "draft %s deleted for run %s; asked the PM (FR-16)", deleted_page_id, prd_id
+            )
+            return RunResult(prd_id, state.stage, stopped_reason="asked the PM about the deletion")
+
+    async def apply_deletion_decision(self, prd_id: str, *, comment_text: str) -> RunResult:
+        """FR-16 — the PM answered whether the draft deletion was intentional.
+
+        Restore only on a confirmed **mistake**; leave it on **intentional**; **re-ask** on an
+        ambiguous reply (never guess). Only acts on a run that is actually awaiting this decision.
+        """
+        async with self._lock:
+            state = self._repository.state.require(prd_id)
+            if not state.pending_deletion_page_id:
+                return RunResult(prd_id, state.stage, stopped_reason="no deletion decision pending")
 
             context = self._context_factory(state)
             try:
-                recovery = await context.recover_draft()
+                decision = await context.classify_deletion_reply(
+                    comment_text, self._llm_metadata(state, "feedback_interpreter")
+                )
+                if decision is DeletionDecision.RESTORE:
+                    return await self._restore_after_confirmation(prd_id, state, context)
+                if decision is DeletionDecision.LEAVE:
+                    if state.review_ticket_key:
+                        await context.post_comment(
+                            state.review_ticket_key, self._deletion_left_body(context)
+                        )
+                    self._repository.state.update_fields(
+                        prd_id,
+                        pending_deletion_page_id=None,
+                        pending_gate=gate_for_stage(state.stage),
+                    )
+                    return RunResult(
+                        prd_id, state.stage, stopped_reason="PM: deletion was intentional"
+                    )
+                # UNCLEAR — do not guess; ask again and stay parked.
+                if state.review_ticket_key:
+                    await context.post_comment(
+                        state.review_ticket_key, self._deletion_reask_body(context)
+                    )
+                return RunResult(
+                    prd_id, state.stage, stopped_reason="deletion reply unclear; re-asked"
+                )
             except AgentError as error:
                 return self._to_error(prd_id, state, error)
 
-            if recovery.action == "healthy":
-                return RunResult(
-                    prd_id, state.stage, stopped_reason="draft intact; nothing to recover"
-                )
+    async def _restore_after_confirmation(self, prd_id, state, context) -> RunResult:
+        """The PM confirmed the deletion was a mistake — recover the draft now (FR-16)."""
+        recovery = await context.recover_draft()
+        if recovery.action == "recreated" and recovery.page_id:
+            self._repository.state.update_fields(prd_id, userdoc_page_id=recovery.page_id)
+            state = self._repository.state.require(prd_id)
 
-            # Repoint the durable state at the recreated page (its id changed).
-            if recovery.action == "recreated" and recovery.page_id:
-                self._repository.state.update_fields(prd_id, userdoc_page_id=recovery.page_id)
-                state = self._repository.state.require(prd_id)
+        if state.review_ticket_key:
+            await context.post_comment(
+                state.review_ticket_key, self._draft_recovered_body(context, recovery, state)
+            )
+        # Clear the pending-deletion wait and restore the stage's natural gate.
+        self._repository.state.update_fields(
+            prd_id, pending_deletion_page_id=None, pending_gate=gate_for_stage(state.stage)
+        )
 
-            # Alert the PM on the review ticket (@mention), whatever the outcome.
-            if state.review_ticket_key:
-                await context.post_comment(
-                    state.review_ticket_key, self._draft_recovered_body(context, recovery, state)
-                )
+        # If the run had errored because the page was gone, self-recover now that it is back.
+        if state.stage is Stage.ERROR and recovery.action in ("restored", "recreated"):
+            checkpoint = state.last_good_checkpoint or Stage.DETECTED
+            self._repository.state.advance_stage(
+                prd_id, checkpoint, queue_status=QueueStatus.IN_PROGRESS
+            )
+            return await self._advance_unlocked(prd_id)
+        return RunResult(
+            prd_id, state.stage, stopped_reason=f"PM confirmed mistake → {recovery.action}"
+        )
 
-            # If the run had errored *because* the page was gone, self-recover now that it is back.
-            if state.stage is Stage.ERROR and recovery.action in ("restored", "recreated"):
-                checkpoint = state.last_good_checkpoint or Stage.DETECTED
-                self._repository.state.advance_stage(
-                    prd_id, checkpoint, queue_status=QueueStatus.IN_PROGRESS
-                )
-                return await self._advance_unlocked(prd_id)
+    @staticmethod
+    def _deletion_question_body(context) -> dict:
+        from app.domain import adf
 
-            return RunResult(prd_id, state.stage, stopped_reason=f"draft {recovery.action}")
+        return adf.doc(
+            adf.paragraph(
+                adf.mention(context.tenant.pm_account_id),
+                adf.text(" I noticed the UserDoc draft page for this review was just "),
+                adf.strong("deleted (moved to trash)"),
+                adf.text(". Was that intentional? Reply "),
+                adf.strong("“restore”"),
+                adf.text(
+                    " (or tell me it was a mistake) and I'll bring it back exactly as it was; "
+                ),
+                adf.text("reply "),
+                adf.strong("“leave it”"),
+                adf.text(" if you meant to delete it. I won't touch the page until you say."),
+            )
+        )
+
+    @staticmethod
+    def _deletion_reask_body(context) -> dict:
+        from app.domain import adf
+
+        return adf.doc(
+            adf.paragraph(
+                adf.mention(context.tenant.pm_account_id),
+                adf.text(
+                    " sorry, I couldn't tell from that whether to restore the deleted draft. Please "
+                    "reply "
+                ),
+                adf.strong("“restore”"),
+                adf.text(" to bring it back, or "),
+                adf.strong("“leave it”"),
+                adf.text(" to keep it deleted."),
+            )
+        )
+
+    @staticmethod
+    def _deletion_left_body(context) -> dict:
+        from app.domain import adf
+
+        return adf.doc(
+            adf.paragraph(
+                adf.mention(context.tenant.pm_account_id),
+                adf.text(
+                    " understood — I'll leave the draft deleted and won't restore it. If you change "
+                    "your mind, say so here and I'll bring it back."
+                ),
+            )
+        )
 
     @staticmethod
     def _draft_recovered_body(context, recovery, state) -> dict:
@@ -258,28 +386,28 @@ class Orchestrator:
             return adf.doc(
                 adf.paragraph(
                     pm,
-                    adf.text(" heads-up: the draft UserDoc page was deleted, so I "),
-                    adf.strong("restored it from the trash"),
-                    adf.text(" — no content was lost. Please give it a quick look: "),
+                    adf.text(" done — I "),
+                    adf.strong("restored the draft from the trash"),
+                    adf.text(", no content lost: "),
                     adf.link("open the draft", url),
-                    adf.text(". Nothing else about the review has changed."),
+                    adf.text(". The review continues from where it was."),
                 )
             )
         if recovery.action == "recreated":
             return adf.doc(
                 adf.paragraph(
                     pm,
-                    adf.text(" the draft UserDoc page was deleted. I couldn't restore it, so I "),
+                    adf.text(" I couldn't restore the original, so I "),
                     adf.strong("recreated it with its latest content"),
                     adf.text(" here: "),
                     adf.link("open the new draft", url),
-                    adf.text(" (the previous link is now dead). Please re-check it."),
+                    adf.text(" (the previous link is now dead). The review continues."),
                 )
             )
         return adf.doc(  # unrecoverable
             adf.paragraph(
                 pm,
-                adf.text(" the draft UserDoc page was deleted and I "),
+                adf.text(" I tried to restore the draft but "),
                 adf.strong("could not recover it"),
                 adf.text(
                     " — it may have been permanently purged from the trash. Please restore it from "

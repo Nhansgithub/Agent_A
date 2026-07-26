@@ -35,6 +35,18 @@ class Speaker(StrEnum):
     AGENT = "Agent"
 
 
+class DeletionDecision(StrEnum):
+    """The PM's answer to 'was deleting the UserDoc draft intentional?' (FR-16).
+
+    The agent recovers **only** on RESTORE. UNCLEAR is the safe default for an ambiguous reply — the
+    agent re-asks rather than guessing, because both wrong guesses are bad (restoring a deliberately
+    deleted page, or leaving a mistakenly deleted one gone)."""
+
+    RESTORE = "restore"  # it was a mistake / bring it back
+    LEAVE = "leave"  # the deletion was intentional / keep it deleted
+    UNCLEAR = "unclear"  # the reply does not clearly say — ask again
+
+
 @dataclass(frozen=True, slots=True)
 class ReviewTurn:
     """One comment in the review-ticket discussion, for the interpreter's conversation memory (FR-10).
