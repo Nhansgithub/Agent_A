@@ -1,7 +1,15 @@
-# Decision Log — Implementation
+# Decision Log — the project's ADR record (append-only)
 
-Append-only. One entry per judgment call made **during the build** that is not already settled by the
-PRD, the Architecture Spine, or `epics.md`. Newest at the bottom.
+> **This is the ongoing decision log for the whole project, not just the build.** New decisions append
+> at the bottom with the next `D-` number; `D-xx` ids are referenced from code comments, so never
+> renumber. Newest at the bottom.
+>
+> **Historical note (2026-07-26):** the state-tracking docs were reset to the agile system
+> (`NOW.md` / `BACKLOG.md` / `CHANGELOG.md`, plus this log and `BLOCKERS.md`). Older entries below —
+> e.g. **D-01** — describe the retired `STATE.md` / `EPIC-STORY-TRACKER.md` / `SESSION-LOG.md` docs and
+> reference `epics.md`; they are kept as history and are **superseded** by the current system described
+> in [../CLAUDE.md](../CLAUDE.md). Read them for *why a past choice was made*, not for how the repo is
+> organized today.
 
 Record a decision here when: the source docs left a choice open, an assumption had to be made to keep
 moving, or reality (an API, a library, the host) contradicted the plan.

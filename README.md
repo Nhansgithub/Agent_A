@@ -16,11 +16,13 @@ moves a gate ticket itself. A run with no human action parks indefinitely and co
 
 | | |
 |---|---|
-| **Project contract — read first** | [CLAUDE.md](CLAUDE.md) |
-| **Build state / resume pointer** | [implementation-state/STATE.md](implementation-state/STATE.md) |
-| **Story backlog & status** | [implementation-state/EPIC-STORY-TRACKER.md](implementation-state/EPIC-STORY-TRACKER.md) |
+| **Project contract & codebase map — read first** | [CLAUDE.md](CLAUDE.md) |
+| **State of play / resume pointer** | [implementation-state/NOW.md](implementation-state/NOW.md) |
+| **Story backlog & status** | [implementation-state/BACKLOG.md](implementation-state/BACKLOG.md) |
+| **What shipped (history)** | [implementation-state/CHANGELOG.md](implementation-state/CHANGELOG.md) |
 | **What's waiting on a human** | [implementation-state/BLOCKERS.md](implementation-state/BLOCKERS.md) |
-| **Requirements (source of truth)** | [planning-artifacts/](planning-artifacts/) — PRD, Architecture Spine, solution design, epics |
+| **Design rationale (ADR log)** | [implementation-state/DECISION-LOG.md](implementation-state/DECISION-LOG.md) |
+| **Requirements & architecture (consult on demand)** | [planning-artifacts/](planning-artifacts/) — PRD, Architecture Spine, solution design |
 
 ## Developing
 
