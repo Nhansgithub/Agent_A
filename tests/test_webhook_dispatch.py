@@ -543,3 +543,34 @@ async def test_a_pm_reply_while_a_deletion_is_pending_routes_to_the_decision() -
 
     assert ("apply_deletion_decision", "page-1") in composition.orchestrator.calls
     assert ("apply_pm_comment", "page-1") not in composition.orchestrator.calls
+
+
+async def test_a_rename_correction_of_a_wrong_named_prd_re_enters_the_flow() -> None:
+    """Reported regression: a wrong-named PRD, renamed correctly, must re-enter and advance (so it
+    reaches the tracking-ticket stage). The run is parked at `detected` on UPLOADING_PM_RENAME."""
+    from app.domain.stage import PendingGate
+
+    state = PrdState(
+        prd_id="page-7",
+        project_id="tenant_one",
+        stage=Stage.DETECTED,
+        pending_gate=PendingGate.UPLOADING_PM_RENAME,
+        rename_request_ticket_key="TESTREV-9",
+        prd_title="wrong_name",
+    )
+    composition, tenant, confluence = make_with_confluence(tenant_state=state)
+    confluence.title = "final_PRD_Widget"  # the corrected name
+    from app.domain.events import ConfluencePageEvent, EventType
+
+    event = ConfluencePageEvent(
+        event_type=EventType.CONFLUENCE_PAGE_UPDATED,
+        page_id="page-7",
+        version_number=None,
+        title="",
+    )
+
+    await _dispatch(composition, Accepted(event=event, tenant=tenant))
+
+    assert ("advance", "page-7") in composition.orchestrator.calls, (
+        "the rename must re-enter the flow"
+    )

@@ -615,3 +615,28 @@ event *label* instead of the page's real *status*.
 confirmation matches how the clarification/structure loops already work. Keying on status (not the
 webhook label) makes it work with the user's existing, imperfectly-configured Automation rule.
 **Supersedes D-36's auto-recovery** (which was the prior FR-16 behavior).
+
+### D-39 · Tracking-ticket name search must not adopt another run's ticket  (2026-07-26, Nhan's bug report)
+**Context:** Nhan reported that after renaming a wrong-named PRD, the **PRD tracking ticket** (Main
+project) was no longer created. Verified against the live tenant: page 2129949 ("final_PRD_booth_app",
+renamed from "Copy of final_PRD_booth_app") had a rename ticket, a Review ticket, and a Publishing
+ticket — but **no tracking ticket**, while other runs had theirs.
+**Root cause:** `locate_or_create_tracking_ticket` falls back to `_search_by_name`
+(`summary ~ "<prd_name>"`) when the marker search finds nothing. Nhan has been testing with **copies
+that end up sharing the title** `final_PRD_booth_app`, so the name search matched the tracking/
+publishing tickets of *other* booth_app runs and **adopted one instead of creating a new one** — the
+run silently got no tracking ticket. Latent since Epic 2 (`_search_by_name` never disambiguated by
+run); surfaced now that multiple PRDs share a name. Not caused by my recent work — the detection→
+tracking flow is otherwise correct (proven by two new re-entry tests that pass).
+**Decision:** two fixes in `ticket_manager`:
+1. `_search_by_name` now **excludes agent-created tickets** — a name match carrying the reserved
+   `agent-generated` label (D-33) belongs to *some* run; this run's own was already found by the
+   marker search, so any other agent match is a *different* run's and must not be adopted. Only a
+   label-less (human-created) ticket is adopted, which is exactly FR-04's intent for the name search.
+2. The tracking marker search is now **typed** (`summary_prefix="PRD tracking:"`, D-32 pattern), so it
+   never adopts the Publishing ticket that shares the Main project + `prd-<id>` marker.
+**Rationale:** the `prd-<id>` marker uniquely identifies a run's own ticket; the name search exists
+only to adopt a *human's* pre-made ticket, and a human ticket has no `agent-generated` label. Using
+the label to gate the fallback is exact and leans on D-33.
+**Note:** the already-complete run 2129949 stays without a tracking ticket (cosmetic; it published
+fine). The fix prevents recurrence; not backfilled.

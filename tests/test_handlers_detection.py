@@ -265,3 +265,25 @@ async def test_the_classifier_is_only_called_once_per_advance() -> None:
     orchestrator, _, context, _ = build(detection=ADMIT)
     await orchestrator.advance("page-1")
     assert context.classifier.calls == 1
+
+
+async def test_rename_correction_re_enters_and_creates_the_tracking_ticket() -> None:
+    """Reported regression: after a wrong-name page is renamed correctly, the PRD tracking ticket is
+    no longer created. Re-entering at `detected` (parked on UPLOADING_PM_RENAME) with a now-matching
+    title must flow detected → confirmed → prd_ticket_done and create the tracking ticket."""
+    orchestrator, repository, context, tickets = build(detection=ADMIT)
+    # The run is parked awaiting the rename (what the wrong-name upload left behind).
+    repository.state.advance_stage(
+        "page-1",
+        Stage.DETECTED,
+        pending_gate=PendingGate.UPLOADING_PM_RENAME,
+        rename_request_ticket_key="TESTREV-9",
+    )
+
+    result = await orchestrator.advance("page-1")
+
+    assert tickets.tracking_created == ["page-1"], (
+        "the tracking ticket must be created after rename"
+    )
+    assert repository.state.require("page-1").stage is Stage.DRAFTED
+    assert result.error is None

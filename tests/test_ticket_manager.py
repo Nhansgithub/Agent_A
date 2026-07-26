@@ -32,7 +32,7 @@ class FakeJira:
         if transitions is not None:
             self.transitions[issue.key] = transitions
 
-    async def find_issue_by_prd_marker(self, _project, prd_id):
+    async def find_issue_by_prd_marker(self, _project, prd_id, *, summary_prefix=None):
         return self.marker_hits.get(prd_id)
 
     async def search_issues(self, _jql, *, limit=50):
@@ -339,3 +339,63 @@ async def test_review_ticket_assigns_the_pm_without_setting_a_reporter() -> None
     record = jira.created[0]
     assert record["assignee"] == TENANT.pm_account_id
     assert record["reporter"] is None
+
+
+async def test_does_not_adopt_another_runs_tracking_ticket_with_the_same_prd_name() -> None:
+    """The reported bug: two PRDs both named 'final_PRD_booth_app'. The second run's marker search
+    finds nothing (its own ticket doesn't exist yet), so it falls back to a name search — which must
+    NOT adopt the FIRST run's agent-created tracking ticket, or the second run silently gets none."""
+    jira = FakeJira()
+    manager = TicketManager(jira)
+    # No ticket carries THIS run's marker.
+    jira.marker_hits = {}
+    # But a name search turns up another run's tracking + publishing tickets (agent-generated).
+    jira.search_hits = [
+        JiraIssue(
+            key="AMS-22",
+            summary="PRD tracking: final_PRD_booth_app",
+            status_category="done",
+            labels=("agent-generated", "prd-OTHER"),
+        ),
+        JiraIssue(
+            key="AMS-23",
+            summary="Approve & publish UserDoc: final_PRD_booth_app",
+            status_category="done",
+            labels=("agent-generated", "prd-OTHER"),
+        ),
+    ]
+    jira.transitions = {"TESTMAIN-1": [done_transition()]}  # the newly-created tracking ticket
+
+    result = await manager.locate_or_create_tracking_ticket(
+        tenant=TENANT,
+        prd_id="page-new",
+        prd_name="final_PRD_booth_app",
+        prd_url="https://x/page-new",
+    )
+
+    assert result.created, "a NEW tracking ticket must be created, not adopted from another run"
+    assert jira.created[-1]["prd_id"] == "page-new", "the new ticket carries THIS run's marker"
+    assert jira.created[-1]["summary"] == "PRD tracking: final_PRD_booth_app"
+
+
+async def test_still_adopts_a_human_created_tracking_ticket_by_name() -> None:
+    """FR-04's intent survives: a HUMAN ticket (no agent-generated label) is still adopted."""
+    jira = FakeJira()
+    manager = TicketManager(jira)
+    jira.marker_hits = {}
+    human_ticket = JiraIssue(
+        key="AMS-5",
+        summary="PRD tracking: Widget",
+        status_name="To Do",
+        status_category="new",
+        labels=(),
+    )  # no agent-generated label
+    jira.search_hits = [human_ticket]
+    jira.add_issue(human_ticket, [done_transition()])
+
+    result = await manager.locate_or_create_tracking_ticket(
+        tenant=TENANT, prd_id="page-1", prd_name="Widget", prd_url="https://x/page-1"
+    )
+
+    assert not result.created, "adopted the human's ticket rather than creating a duplicate"
+    assert result.issue.key == "AMS-5"

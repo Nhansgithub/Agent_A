@@ -791,3 +791,23 @@ comment-routing, migration, and classifier tests. Suite green, ruff clean, 5/5 c
 
 **Docs:** PRD FR-16 and Spine AD-25 rewritten (human-gated); SETUP-GUIDE note updated (status-based
 detection; ask-first). Supersedes D-36's auto-recovery.
+
+---
+
+## Session 6 — 2026-07-26 · Tracking ticket skipped for same-named PRDs (D-39)
+
+**Reported:** after a wrong-named PRD is renamed correctly, the PRD tracking ticket is no longer sent.
+
+**Diagnosis:** the detection→tracking flow is correct in code — two new re-entry tests (handler-level
+and dispatch-level) both pass. Querying the live tenant directly (Jira, no SSH) showed the truth:
+page 2129949 ("final_PRD_booth_app", a renamed *copy*) had rename/Review/Publishing tickets but no
+tracking ticket. Root cause: `_search_by_name` (the FR-04 name fallback) matched other booth_app runs'
+tickets — Nhan tests with copies that share the title — and adopted one instead of creating a new
+tracking ticket.
+
+**Fix (D-39):** `_search_by_name` excludes `agent-generated` tickets (a same-named match from another
+run is the agent's, never adopt it — this run's own is found by the marker); and the tracking marker
+search is typed to "PRD tracking:" so it can't adopt the Publishing ticket sharing the marker.
+
+**Tests:** 524 → 528. New: two rename→tracking re-entry tests, and two ticket-manager regression tests
+(don't adopt another run's same-named ticket; still adopt a human's). Suite green, ruff clean, 5/5.

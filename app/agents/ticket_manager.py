@@ -35,6 +35,7 @@ _HUMAN_GATE = frozenset({"review", "publishing"})
 #: `prd-<id>` marker in one project (a rename request + a Review ticket in the Review project; a
 #: tracking + a Publishing ticket in Main), so a marker search must be told which *type* it wants.
 #: Defined once and reused by both the creator and the finder so the two can never drift apart.
+TRACKING_TICKET_SUMMARY_PREFIX = "PRD tracking:"
 REVIEW_TICKET_SUMMARY_PREFIX = "Review UserDoc:"
 PUBLISHING_TICKET_SUMMARY_PREFIX = "Approve & publish UserDoc:"
 
@@ -71,10 +72,15 @@ class TicketManager:
     ) -> TrackingTicketResult:
         """Find the PRD-tracking ticket anywhere, or create it, then drive it to Done (FR-04).
 
-        Order matters for AD-11 idempotency: first adopt an orphan created by a previous crashed
-        attempt (found by the `prd_id` correlation label), then search by name, then create.
+        Order matters for AD-11 idempotency: first adopt *this run's own* orphan (found by the
+        `prd_id` correlation label, typed to a tracking ticket), then a human-created ticket by name,
+        then create.
         """
-        issue = await self._jira.find_issue_by_prd_marker(tenant.jira_main_project_key, prd_id)
+        # Typed to the tracking ticket: the Publishing ticket shares this project + the same `prd-<id>`
+        # marker, so an untyped search could adopt it (the D-32 collision, for Main).
+        issue = await self._jira.find_issue_by_prd_marker(
+            tenant.jira_main_project_key, prd_id, summary_prefix=TRACKING_TICKET_SUMMARY_PREFIX
+        )
         created = False
 
         if issue is None:
@@ -83,7 +89,7 @@ class TicketManager:
         if issue is None:
             issue = await self._jira.create_issue(
                 project_key=tenant.jira_main_project_key,
-                summary=f"PRD tracking: {prd_name}",
+                summary=f"{TRACKING_TICKET_SUMMARY_PREFIX} {prd_name}",
                 description=self._tracking_description(prd_name, prd_url),
                 issue_type="Task",
                 prd_id=prd_id,
@@ -97,12 +103,21 @@ class TicketManager:
         return TrackingTicketResult(issue=issue, created=created, transitioned=transitioned)
 
     async def _search_by_name(self, project_key: str, prd_name: str) -> JiraIssue | None:
-        """FR-04 — search across the project, not under a fixed parent; a human ticket may be anywhere."""
+        """FR-04 — adopt a **human-created** tracking ticket found anywhere in the project by name.
+
+        Critically, it must **never** adopt an *agent-created* ticket that belongs to a **different**
+        run but happens to share this PRD's title — the reported bug: two PRDs both named
+        `final_PRD_booth_app` made the name search match the first run's tracking/publishing tickets,
+        so the second run silently skipped creating its own. Agent tickets carry the reserved
+        `agent-generated` label (D-33); this run's own ticket was already found by the marker search
+        above, so any *other* agent-labelled match is a different run's — skip it. Only a ticket
+        without the label is a genuine human ticket worth adopting.
+        """
         escaped = prd_name.replace('"', '\\"')
         candidates = await self._jira.search_issues(
-            f'project = "{project_key}" AND summary ~ "{escaped}" ORDER BY created ASC', limit=5
+            f'project = "{project_key}" AND summary ~ "{escaped}" ORDER BY created ASC', limit=10
         )
-        return candidates[0] if candidates else None
+        return next((c for c in candidates if AGENT_GENERATED_LABEL not in c.labels), None)
 
     # -- AD-13: drive a ticket to a done-category status ---------------------------------------
 
