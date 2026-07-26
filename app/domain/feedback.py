@@ -61,6 +61,26 @@ class ReviewTurn:
     text: str
 
 
+@dataclass(frozen=True, slots=True)
+class InlineRestatement:
+    """The Feedback interpreter's structured reading of a Confluence inline comment (FR-17).
+
+    A reviewer's inline note is plain-language feedback anchored to a passage. The interpreter turns it
+    into the same `Section / Issue / Suggested change` shape the review loop already speaks, so the
+    hand-off to the conversation-aware loop (FR-10a) is seamless: the restatement becomes the
+    `pending_feedback` the loop confirms and applies.
+
+    `solution_proposed` records whether the reviewer supplied the fix or the agent had to propose one
+    (the FR-17 skill — help with a solution when none was given). It only changes the wording of the
+    confirmation the agent posts ("here's a fix I'd suggest" vs "did I capture your fix?"); the routing
+    is identical either way.
+    """
+
+    section: str
+    structured_feedback: str
+    solution_proposed: bool = False
+
+
 class ClarificationTrigger(StrEnum):
     """The FR-08 enumerated triggers — the ONLY cases where the agent blocks to ask (EH-08).
 

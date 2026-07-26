@@ -811,3 +811,38 @@ search is typed to "PRD tracking:" so it can't adopt the Publishing ticket shari
 
 **Tests:** 524 → 528. New: two rename→tracking re-entry tests, and two ticket-manager regression tests
 (don't adopt another run's same-named ticket; still adopt a human's). Suite green, ruff clean, 5/5.
+
+---
+
+## Session 7 — 2026-07-26 · Inline-comment feedback channel (FR-17 / AD-26, D-40)
+
+**Requested:** let a reviewer give feedback by leaving a **Confluence inline comment** on the draft;
+the agent should post it on the Jira Review ticket **@-mentioning the exact commenter** (not the config
+PM), anchor it to the highlighted "section", **propose a solution if none was given**, and then let the
+conversation-aware Feedback interpreter drive the back-and-forth.
+
+**Research (offline):** confirmed via Atlassian docs that the *Page commented* Automation trigger fires
+for inline **and** footer comments (no per-type trigger), that comment smart values (`{{comment.id}}`,
+`{{comment.author.accountId}}`) populate only on that trigger, and that the highlighted passage is
+**not** a smart value — so the agent must re-read the comment. The tenant currently has no live comments
+to sample, so the adapter parses defensively (v1 primary — where the other Confluence exceptions live
+and which reports inline-vs-footer via `extensions.location`; v2 fallback for the documented v2 404).
+
+**Built:**
+- `ConfluenceCommentEvent` + `EventType.CONFLUENCE_INLINE_COMMENT_CREATED`; parser (`page_commented`
+  marker + structural `comment`+`page` fallback); tenant routing (space key / single-tenant); dispatch
+  `_dispatch_confluence_comment` (acts only if the comment's page is a run's `userdoc_page_id`).
+- `ConfluenceAdapter.get_inline_comment` (v1-primary, v2 fallback, tolerant parse) → `InlineComment`.
+- `FeedbackInterpreter.restate_inline_comment` → `InlineRestatement` (proposes a fix, flags it);
+  SKILL.md gained the propose-a-solution skill for the ordinary `CONFIRM_STRUCTURE` route too.
+- `Orchestrator.apply_inline_comment` — reads, restates, posts @-mentioning the exact commenter, parks
+  at `AWAITING_STRUCTURE_CONFIRM` (reusing the existing conversation loop for the reply). New
+  `active_reviewer_account_id` column (additive migration) so the whole sub-conversation addresses the
+  commenter; review-loop @-mention helpers take a `mention_id`, cleared when the feedback resolves.
+
+**Tests:** 528 → 548 (+20). Adapter v1/v2/footer, parse + structural fallback, routing, interpreter
+restatement (incl. propose-solution + parse-failure), orchestrator pickup + exact-commenter mention +
+hand-off + state round-trip. Suite green, ruff clean, 5/5 contracts.
+
+**Docs:** PRD FR-17, Spine AD-26, DECISION-LOG D-40, SETUP-GUIDE Part 7c (the 4th Automation rule).
+**Live-activation pending:** the *Page commented* Automation rule + a Droplet redeploy.

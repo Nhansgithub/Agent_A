@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from app.config.registry import ConfigRegistry
 from app.config.schema import TenantConfig
 from app.domain.events import (
+    ConfluenceCommentEvent,
     ConfluencePageEvent,
     JiraCommentEvent,
     JiraIssueUpdatedEvent,
@@ -54,6 +55,8 @@ class TenantRouter:
     def resolve(self, event: WebhookEvent) -> RoutingDecision:
         if isinstance(event, ConfluencePageEvent):
             return self._resolve_confluence(event)
+        if isinstance(event, ConfluenceCommentEvent):
+            return self._resolve_confluence_comment(event)
         if isinstance(event, JiraCommentEvent | JiraIssueUpdatedEvent):
             return self._resolve_jira(event)
         return RoutingDecision(None, f"unroutable event type {type(event).__name__}")
@@ -92,6 +95,37 @@ class TenantRouter:
             "page event carried no container folder id and no unambiguous space key; "
             "set confluence_space_key on the tenant, or confirm the webhook payload includes the "
             "page container (PRD §13 Q3)",
+        )
+
+    def _resolve_confluence_comment(self, event: ConfluenceCommentEvent) -> RoutingDecision:
+        """Route an inline-comment event (FR-17).
+
+        A comment payload rarely carries the page's container folder, so it cannot route by folder the
+        way a page event does. It routes by space key when the rule supplies one, else falls back to
+        the single configured tenant — the same fallback a container-less page event uses. This is a
+        routing convenience only: `_dispatch_confluence_comment` still confirms the comment is on a
+        tracked UserDoc draft before any work, so a stray comment can never enter a run.
+        """
+        if event.space_key:
+            matches = [
+                tenant
+                for tenant in self._registry.tenants.values()
+                if tenant.confluence_space_key and tenant.confluence_space_key == event.space_key
+            ]
+            if len(matches) == 1:
+                return RoutingDecision(matches[0], f"space key {event.space_key}")
+            if len(matches) > 1:
+                return RoutingDecision(
+                    None, f"space key {event.space_key} is claimed by more than one tenant"
+                )
+
+        tenants = list(self._registry.tenants.values())
+        if len(tenants) == 1:
+            return RoutingDecision(tenants[0], "single configured tenant (comment event)")
+        return RoutingDecision(
+            None,
+            "comment event carried no unambiguous space key and more than one tenant is configured; "
+            "set confluence_space_key on the tenant or send the space key in the Automation rule",
         )
 
     # -- Jira ---------------------------------------------------------------------------------

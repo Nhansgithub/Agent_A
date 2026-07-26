@@ -3,20 +3,25 @@
 > **This is the file to read first in every session.** It answers exactly one question:
 > *what do I do next?* Keep it short and current. Update it at every story boundary.
 
-**Last updated:** 2026-07-25 (session 4 — draft-deletion recovery + rename-churn guard + deep audit)
+**Last updated:** 2026-07-26 (session 5 — inline-comment feedback channel FR-17)
 **Phase:** Phase 4 — Implementation
 **Scope:** DEMO with FULL HARDENING
 
-> **Latest change (D-35/D-36/D-37 + audit):** two resilience features shipped —
-> **FR-16 draft-deletion recovery** (restore-from-trash or recreate-with-latest-content, @-mention the
-> PM, self-heal an errored run; also runs defensively before publish) and the **FR-01a rename-churn
-> guard** (an already-drafted PRD is no longer re-caught when its name is toggled; stray-space pages
-> refused at the door). Plus 3 audit fixes (crash-safe re-entry, `_first` list traversal, the two
-> review-loop state cross-edges). Suite **515 green**, ruff clean, 5/5 contracts.
+> **Latest change (D-40 · FR-17 / AD-26 — inline-comment feedback channel):** a reviewer can now leave
+> a **Confluence inline comment** on the draft; the agent detects it (a *Page commented* Automation
+> rule → new `ConfluenceCommentEvent`), reads it via the adapter (v1-primary, v2 fallback), restates it
+> on the Jira Review ticket **@-mentioning the exact commenter** (not the config PM), anchors it to the
+> highlighted "section", **proposes a fix if the reviewer gave none**, and hands off to the existing
+> conversation-aware loop to finalize — which now addresses that commenter throughout (new
+> `active_reviewer_account_id` column, additive migration). The Feedback interpreter's SKILL also gained
+> the propose-a-solution skill for the ordinary Jira loop. Suite **548 green**, ruff clean, 5/5 contracts.
 >
-> ⚠️ **Needs a Droplet redeploy + a THIRD Confluence Automation rule** (page-trashed) for FR-16 to
-> fire live — SETUP-GUIDE Part 7b. Without the rule, deletion recovery still works defensively at
-> publish time, just not proactively.
+> ⚠️ **Needs a Droplet redeploy + a FOURTH Confluence Automation rule** (*Page commented*) for FR-17 to
+> fire live — SETUP-GUIDE Part 7c (the comment rule sends a different Custom-data body). Everything is
+> committed to code + tests; the rule and redeploy are the only live-activation steps.
+>
+> **Prior change (D-35…D-39):** FR-16 draft-deletion recovery (now human-gated, D-38), FR-01a
+> rename-churn guard, the type-aware tracking-ticket search fix (D-39), and 3 audit fixes.
 
 ---
 

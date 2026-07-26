@@ -219,6 +219,26 @@ class RunContext:
             comment_text=comment_text, metadata=metadata
         )
 
+    async def read_inline_comment(self, comment_id: str):
+        """FR-17 — read a Confluence inline comment (section anchor, author, body) via the adapter."""
+        return await self.confluence.get_inline_comment(comment_id)
+
+    async def restate_inline_comment(
+        self, *, section: str, comment_text: str, metadata: CallMetadata
+    ):
+        """FR-17 — restate an inline comment as Section/Issue/Suggested-change, proposing a fix if none.
+
+        Enriches the interpreter with the current draft and PRD so a proposed solution fits the doc,
+        mirroring `interpret_comment`. Returns a typed `InlineRestatement`.
+        """
+        return await self.feedback_interpreter.restate_inline_comment(
+            section=section,
+            comment_text=comment_text,
+            draft_markdown=await self.current_draft_markdown(),
+            prd_markdown=await self.page_markdown(),
+            metadata=metadata,
+        )
+
     async def post_comment(self, issue_key: str, body: dict) -> None:
         """Post an agent comment and immediately claim its id in `processed_events` (AD-9, AD-10).
 

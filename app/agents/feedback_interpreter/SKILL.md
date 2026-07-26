@@ -45,6 +45,12 @@ short confirmation question in `question` (e.g. "You didn't use the format, so I
 — is this what you mean?"). The orchestrator will post it and **wait for the PM to confirm** before
 anything changes. Do not guess and apply — restate and check.
 
+**Propose a solution when none was given.** If the PM names a problem but does not say how to fix it,
+do **not** leave `Suggested change` empty — propose a concrete, specific fix yourself that resolves
+the issue and fits the PRD, and say in your `question` that you've suggested one ("you didn't give a
+fix, so here's what I'd propose — does this work?"). Helping with the solution is part of the job; a
+restatement that just parrots "this section is unclear" back at the PM wastes the round.
+
 ### 3. `CLARIFY` — a blocking question is genuinely necessary
 Use this **only** when one of these four enumerated triggers holds. These are the *only* cases where
 blocking to ask is allowed:

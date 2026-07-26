@@ -21,6 +21,7 @@ from app.domain.feedback import (
     DeletionDecision,
     FeedbackDecision,
     FeedbackRoute,
+    InlineRestatement,
     ReviewTurn,
 )
 
@@ -112,6 +113,77 @@ class FeedbackInterpreter:
             f"Current UserDoc draft (Markdown, truncated):\n---\n{draft[:12000]}\n---\n\n"
             f"Source PRD (Markdown, truncated):\n---\n{prd[:12000]}\n---\n\n"
             "Classify this comment per your rubric. Respond with only the JSON object."
+        )
+
+    async def restate_inline_comment(
+        self,
+        *,
+        section: str,
+        comment_text: str,
+        draft_markdown: str,
+        prd_markdown: str,
+        metadata: CallMetadata,
+    ) -> InlineRestatement:
+        """Turn a Confluence inline comment into structured feedback to confirm (FR-17).
+
+        An inline note is plain-language feedback anchored to a highlighted passage. This restates it
+        into the review loop's `Section / Issue / Suggested change` shape so the hand-off to the
+        conversation-aware loop is seamless. Crucially, if the reviewer flagged a problem but proposed
+        no fix, the agent **proposes one itself** (the FR-17 "help with a solution" skill) rather than
+        leaving the suggestion blank — and reports that it did, so the confirmation can be worded
+        honestly ("here's a fix I'd suggest" vs "did I capture your fix?").
+
+        Returns a typed `InlineRestatement`; a parse failure raises rather than guessing (AD-16).
+        """
+        selection = section.strip() or "(the highlighted passage)"
+        prompt = (
+            "A reviewer left an inline comment on the UserDoc draft, anchored to this highlighted "
+            f"passage:\n---\n{selection[:1500]}\n---\n\n"
+            f"Their comment:\n---\n{comment_text.strip() or '(no text — just a highlight)'}\n---\n\n"
+            "Restate this as one structured feedback block the review loop can apply:\n"
+            "- Section: name the part of the doc the highlighted passage belongs to (a heading or a "
+            "short description of where it is) — not the whole passage verbatim.\n"
+            "- Issue: what the reviewer is flagging, in your words.\n"
+            "- Suggested change: the reviewer's proposed fix if they gave one. If they did NOT propose "
+            "a fix, PROPOSE a concrete, specific one yourself that resolves the issue and fits the "
+            'PRD, and set "solution_proposed": true.\n\n'
+            f"Current UserDoc draft (Markdown, truncated):\n---\n{draft_markdown[:10000]}\n---\n\n"
+            f"Source PRD (Markdown, truncated):\n---\n{prd_markdown[:10000]}\n---\n\n"
+            "Respond with ONLY a JSON object: "
+            '{"section": "...", "issue": "...", "suggested_change": "...", '
+            '"solution_proposed": true|false}'
+        )
+        response = await self._llm.complete(
+            model=self._model,
+            system=(
+                "You convert a reviewer's inline comment on a document into a single structured "
+                "feedback block (Section / Issue / Suggested change). When the reviewer identifies a "
+                "problem but offers no fix, you propose a concrete fix yourself and flag that you did. "
+                "You never leave the suggested change empty. Respond with only the JSON object."
+            ),
+            prompt=prompt,
+            metadata=metadata,
+        )
+        return self._parse_restatement(response.text, section=selection)
+
+    @staticmethod
+    def _parse_restatement(text: str, *, section: str) -> InlineRestatement:
+        payload = _extract_json(text)
+        if payload is None:
+            raise AgentError(
+                message=f"Inline-comment restatement was not parseable JSON: {text[:200]!r}",
+                suggested_fix="The interpreter must return {section, issue, suggested_change, "
+                "solution_proposed}. Check the FR-17 restate_inline_comment prompt.",
+                operation="feedback_interpreter.restate_inline_comment",
+            )
+        resolved_section = str(payload.get("section", "")).strip() or section
+        issue = str(payload.get("issue", "")).strip()
+        suggested = str(payload.get("suggested_change", "")).strip()
+        structured = f"Section: {resolved_section}\nIssue: {issue}\nSuggested change: {suggested}"
+        return InlineRestatement(
+            section=resolved_section,
+            structured_feedback=structured,
+            solution_proposed=bool(payload.get("solution_proposed", False)),
         )
 
     async def classify_deletion_reply(

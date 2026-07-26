@@ -21,7 +21,7 @@ from typing import Any
 from app.adapters.http import AtlassianClient
 from app.adapters.markdown import markdown_to_storage, storage_to_markdown
 from app.config.constants import AGENT_GENERATED_LABEL, PRD_CORRELATION_PROPERTY
-from app.domain.atlassian import ConfluencePage
+from app.domain.atlassian import ConfluencePage, InlineComment
 from app.domain.errors import AgentError
 
 V2 = "/wiki/api/v2"
@@ -122,6 +122,44 @@ class ConfluenceAdapter:
             if await self.get_content_property(page_id, PRD_CORRELATION_PROPERTY) == prd_id:
                 return await self.get_page(page_id)
         return None
+
+    async def get_inline_comment(self, comment_id: str) -> InlineComment:
+        """Read one page comment — the FR-17 inline-feedback channel (AD-14).
+
+        Reads via the **v1** content endpoint as the primary path, for two reasons the architecture
+        already knows well: v1 is where the other Confluence exceptions live (move, restriction,
+        restore), and the v2 ``/inline-comments/{id}`` endpoint is documented to 404 intermittently.
+        One v1 call returns everything needed — the highlighted-passage anchor
+        (``extensions.inlineProperties.originalSelection``), whether the comment is inline or a
+        page-level footer comment (``extensions.location``), the author, the body, and the containing
+        page — so the caller need not trust the Automation smart values for anything but the id.
+
+        Falls back to v2 if v1 is unavailable, and parses tolerantly (either shape's field names), the
+        same defensive stance the webhook parser takes toward payload variants.
+        """
+        try:
+            body = await self._client.request(
+                "GET",
+                f"{V1}/content/{comment_id}",
+                operation="get_inline_comment",
+                params={
+                    "expand": (
+                        "body.storage,extensions.inlineProperties,extensions.resolution,"
+                        "history,container,version"
+                    )
+                },
+                context={"comment": comment_id},
+            )
+            return self._inline_comment_from_v1(comment_id, body or {})
+        except AgentError:
+            body = await self._client.request(
+                "GET",
+                f"{V2}/inline-comments/{comment_id}",
+                operation="get_inline_comment_v2",
+                params={"body-format": "storage"},
+                context={"comment": comment_id},
+            )
+            return self._inline_comment_from_v2(comment_id, body or {})
 
     async def get_content_property(self, page_id: str, key: str) -> str | None:
         body = await self._client.request(
@@ -300,6 +338,50 @@ class ConfluenceAdapter:
         return markdown_to_storage(markdown)
 
     # -- internals ---------------------------------------------------------------------------
+
+    @classmethod
+    def _inline_comment_from_v1(cls, comment_id: str, body: dict[str, Any]) -> InlineComment:
+        """Parse a v1 ``content`` comment. Inline vs footer is ``extensions.location``."""
+        extensions = body.get("extensions") or {}
+        inline_props = extensions.get("inlineProperties") or {}
+        resolution = extensions.get("resolution") or {}
+        history = body.get("history") or {}
+        version_by = (body.get("version") or {}).get("by") or {}
+        container = body.get("container") or {}
+        author = (history.get("createdBy") or {}).get("accountId") or version_by.get("accountId")
+        return InlineComment(
+            id=str(body.get("id") or comment_id),
+            page_id=str(container.get("id") or ""),
+            author_account_id=str(author or ""),
+            body_text=cls._comment_body_text(body),
+            section=str(inline_props.get("originalSelection") or ""),
+            is_inline=str(extensions.get("location") or "").lower() == "inline"
+            or bool(inline_props),
+            resolved=str(resolution.get("status") or "open").lower() == "resolved",
+        )
+
+    @classmethod
+    def _inline_comment_from_v2(cls, comment_id: str, body: dict[str, Any]) -> InlineComment:
+        """Parse a v2 ``inline-comments`` object. The anchor is ``properties.inlineOriginalSelection``."""
+        properties = body.get("properties") or {}
+        version = body.get("version") or {}
+        return InlineComment(
+            id=str(body.get("id") or comment_id),
+            page_id=str(body.get("pageId") or ""),
+            author_account_id=str(version.get("authorId") or ""),
+            body_text=cls._comment_body_text(body),
+            section=str(properties.get("inlineOriginalSelection") or ""),
+            is_inline=True,  # a v2 inline-comments read is inline by construction
+            resolved=str(body.get("resolutionStatus") or "open").lower() == "resolved",
+        )
+
+    @staticmethod
+    def _comment_body_text(body: dict[str, Any]) -> str:
+        """A comment body → plain text. Storage is HTML; markdownify then strip is enough for a note."""
+        storage = ((body.get("body") or {}).get("storage") or {}).get("value") or ""
+        if not storage:
+            return ""
+        return storage_to_markdown(storage).strip()
 
     @staticmethod
     def _to_page(body: dict[str, Any]) -> ConfluencePage:

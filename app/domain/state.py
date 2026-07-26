@@ -78,6 +78,12 @@ class PrdState:
     handler rather than the feedback loop. The agent recovers the draft **only** if the PM confirms it
     was a mistake — it never auto-recovers."""
 
+    active_reviewer_account_id: str | None = None
+    """FR-17 — the account the review loop is currently in conversation with, when it is **not** the
+    configured Reviewer PM. Set to the exact author of a Confluence inline comment so the whole
+    confirmation sub-conversation @-mentions the person who raised the note, not the config PM. `None`
+    for an ordinary Jira-comment thread, in which case the loop addresses the configured PM as before."""
+
     # --- AD-18 publish sub-checkpoints ---------------------------------------------------------
     # The publish transaction's four side-effects are individually guarded so resuming the
     # `publishing` stage skips what already succeeded and never re-applies it.

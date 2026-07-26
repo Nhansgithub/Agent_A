@@ -236,6 +236,26 @@ When the Publishing ticket is marked Done, the agent SHALL:
 > (restore it, or reply ‘restore’ on the Review ticket, then resume) rather than silently restoring a
 > page a human deleted.
 
+> **Amendment 2026-07-26 (FR-17 — inline-comment feedback channel).** A reviewer MAY give feedback by
+> leaving a **Confluence inline comment** on the UserDoc draft (highlighting a passage and commenting on
+> it), as an alternative to commenting on the Jira Review ticket. When one appears on a run's draft while
+> it is under review, the agent SHALL:
+> 1. **Detect and read it.** A Confluence *Page commented* Automation rule delivers the comment id; the
+>    agent reads the comment through the adapter to get its author, body, and the **highlighted passage**
+>    it anchors to (the "section"). The trigger also fires for page-level (footer) comments and comments
+>    on other pages — those are read and ignored; only an inline comment on a tracked draft is acted on.
+> 2. **Restate it on the Review ticket, tagging the exact commenter.** Post a comment on the draft's Jira
+>    **Review ticket**, **@-mentioning the person who left the inline comment** (their Atlassian account,
+>    *not* the configured Reviewer PM), noting the section it concerns, and restating it in the
+>    `Section / Issue / Suggested change` format.
+> 3. **Propose a solution when none was given.** If the reviewer named a problem but no fix, the agent
+>    **proposes a concrete one itself** and says so, rather than leaving the suggested change blank.
+> 4. **Confirm, then hand off to the conversation.** Ask the commenter whether the restatement captures
+>    what they meant and park awaiting confirmation (`AWAITING_STRUCTURE_CONFIRM`). From there the
+>    conversation-aware Feedback interpreter (FR-10 amendment) drives the back-and-forth — confirm,
+>    adjust, or clarify — and finalizes the change, addressing the **same commenter** throughout. No
+>    draft edit happens until they confirm (EH-08 spirit); the loop never fabricates their reply (AD-16).
+
 ### 6.2 PM structured feedback format
 
 The agent requests, and internally uses, this exact structure (one block per point):

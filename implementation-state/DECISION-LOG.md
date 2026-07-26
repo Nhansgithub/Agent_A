@@ -640,3 +640,48 @@ only to adopt a *human's* pre-made ticket, and a human ticket has no `agent-gene
 the label to gate the fallback is exact and leans on D-33.
 **Note:** the already-complete run 2129949 stays without a tracking ticket (cosmetic; it published
 fine). The fix prevents recurrence; not backfilled.
+
+---
+
+### D-40 · Inline-comment feedback channel (FR-17 / AD-26)  (2026-07-26, Nhan's request)
+**Context:** Nhan wants a second way to give draft feedback: a reviewer highlights a passage in the
+Confluence draft and leaves an **inline comment**. The agent should notice it, restate it on the Jira
+Review ticket **@-mentioning the exact commenter (not the config PM)**, anchor it to the highlighted
+"section", propose a solution if the reviewer gave none, and then let the conversation-aware Feedback
+interpreter (D-30) drive the back-and-forth to finalize the change.
+**Decisions:**
+1. **New event, same spine.** A `ConfluenceCommentEvent` (EventType `confluence.inline_comment_created`)
+   parses a Confluence "Page commented" Automation rule (`webhookEvent: page_commented`, a marker chosen
+   so it never collides with Jira's `comment_created`). It dedupes on the comment id like a Jira comment
+   (globally unique, no version marker) and routes by space key / single-tenant fallback (a comment
+   payload rarely carries a container folder). Dispatch acts **only** if the comment's page is a run's
+   `userdoc_page_id`; everything else is ignored, so the space-wide trigger is safe.
+2. **Read via v1, primary.** `ConfluenceAdapter.get_inline_comment` reads the comment through the **v1**
+   `content/{id}` endpoint (with `expand=extensions.inlineProperties,extensions.resolution,…`), falling
+   back to v2 `inline-comments/{id}`. v1 is primary for two reasons: it is where the other Confluence
+   exceptions already live (move/restriction/restore), and the v2 inline-comments endpoint is documented
+   to 404 intermittently. v1 also yields `extensions.location`, so a page-level **footer** comment is
+   told apart from an inline one (`is_inline`). The highlighted passage is
+   `inlineProperties.originalSelection` (v1) / `properties.inlineOriginalSelection` (v2) — the "section".
+   Parsing is tolerant of both shapes, matching the webhook parser's stance.
+3. **Reuse the confirmation loop; don't fork it.** `apply_inline_comment` restates the note into the
+   review loop's `Section / Issue / Suggested change` shape and parks at `AWAITING_STRUCTURE_CONFIRM` with
+   the restatement as `pending_feedback` — exactly the state a plain-language PM comment reaches. The
+   PM's reply is then handled by the **existing** `apply_pm_comment` conversation loop, so the whole
+   back-and-forth (yes / yes-but / no-I-meant) is the tested D-30 machinery, not a parallel path.
+4. **Address the exact person, throughout.** A new `active_reviewer_account_id` state column (additive
+   migration, D-38 pattern) records the commenter. The review-loop @-mention helpers now take a
+   `mention_id` that defaults to the config PM but is set to the active reviewer when present, so the
+   confirmation sub-conversation tags the person who raised the note. It is cleared once the feedback is
+   applied or abandoned, so a later unrelated Jira thread addresses the config PM again.
+5. **The interpreter proposes solutions.** `restate_inline_comment` proposes a concrete fix (and flags
+   `solution_proposed`) when the reviewer named a problem but no fix. The general skill was also added to
+   the `CONFIRM_STRUCTURE` route in the Feedback interpreter's `SKILL.md`, so the ordinary Jira loop
+   proposes fixes too — a restatement that just parrots "this is unclear" back wastes the round.
+**Invariants preserved:** AD-1 (only the adapter reads the comment; the orchestrator injects it), AD-9
+(comment-id dedupe), AD-15 (no gate ticket is transitioned), AD-16 (the interpreter classifies; routing
+is deterministic and unchanged). **Needs a 4th Confluence Automation rule** (*Page commented*) to fire
+live — SETUP-GUIDE Part 7c.
+**Tests:** +20 (adapter v1/v2/footer, parse + structural fallback, routing, interpreter restatement,
+orchestrator pickup + exact-commenter mention + hand-off + state round-trip). Suite **548 green**, ruff
+clean, 5/5 contracts.

@@ -64,6 +64,35 @@ class JiraComment:
 
 
 @dataclass(frozen=True, slots=True)
+class InlineComment:
+    """One Confluence comment on a draft page — the FR-17 inline-feedback channel.
+
+    A reviewer highlighting a passage and choosing "Add inline comment" is giving feedback the same
+    way a Jira comment does, but anchored to a specific place in the doc. `section` carries that anchor
+    — the highlighted text the comment hangs off (Confluence's ``inlineProperties.originalSelection``)
+    — so the agent can tell the reviewer *which* part of the draft it understood the note to be about.
+
+    `is_inline` distinguishes a highlighted-passage comment from a page-level (footer) one: the
+    Confluence "Page commented" Automation trigger fires for both, and only an inline comment carries a
+    section anchor. `author_account_id` is site-wide, so it is directly usable to @-mention the exact
+    reviewer on the Jira Review ticket (AD-10 — one Atlassian identity across Jira and Confluence).
+    """
+
+    id: str
+    page_id: str
+    author_account_id: str
+    body_text: str
+    section: str = ""
+    is_inline: bool = True
+    resolved: bool = False
+
+    @property
+    def has_suggestion(self) -> bool:
+        """Whether the reviewer's note is non-empty (a bare highlight with no text still triggers)."""
+        return bool(self.body_text.strip())
+
+
+@dataclass(frozen=True, slots=True)
 class ConfluencePage:
     id: str
     title: str

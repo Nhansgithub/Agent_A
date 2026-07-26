@@ -49,6 +49,10 @@ class FakeOrchestrator:
         self.calls.append(("apply_deletion_decision", prd_id))
         return RunResult(prd_id, Stage.AWAITING_REVIEW)
 
+    async def apply_inline_comment(self, prd_id, *, comment_id, commenter_account_id=""):
+        self.calls.append(("apply_inline_comment", prd_id))
+        return RunResult(prd_id, Stage.AWAITING_STRUCTURE_CONFIRM)
+
 
 @dataclass
 class FakeComposition:
@@ -543,6 +547,51 @@ async def test_a_pm_reply_while_a_deletion_is_pending_routes_to_the_decision() -
 
     assert ("apply_deletion_decision", "page-1") in composition.orchestrator.calls
     assert ("apply_pm_comment", "page-1") not in composition.orchestrator.calls
+
+
+# -- FR-17: an inline comment on a tracked draft routes to the feedback pickup --------------------
+
+
+def inline_comment_event(page_id="draft-1", comment_id="ic-1", author="acct-designer"):
+    from app.domain.events import ConfluenceCommentEvent, EventType
+
+    return ConfluenceCommentEvent(
+        event_type=EventType.CONFLUENCE_INLINE_COMMENT_CREATED,
+        comment_id=comment_id,
+        page_id=page_id,
+        author_account_id=author,
+    )
+
+
+async def test_an_inline_comment_on_a_tracked_draft_routes_to_pickup() -> None:
+    state = PrdState(
+        prd_id="page-1",
+        project_id="tenant_one",
+        stage=Stage.AWAITING_REVIEW,
+        review_ticket_key="TESTREV-1",
+        userdoc_page_id="draft-1",
+    )
+    composition, tenant = make(state)
+
+    await _dispatch(composition, Accepted(inline_comment_event(page_id="draft-1"), tenant))
+
+    assert ("apply_inline_comment", "page-1") in composition.orchestrator.calls
+
+
+async def test_an_inline_comment_on_a_non_draft_page_is_ignored() -> None:
+    """A comment on a source PRD or any unrelated page resolves to no run and never enters the flow."""
+    state = PrdState(
+        prd_id="page-1",
+        project_id="tenant_one",
+        stage=Stage.AWAITING_REVIEW,
+        review_ticket_key="TESTREV-1",
+        userdoc_page_id="draft-1",
+    )
+    composition, tenant = make(state)
+
+    await _dispatch(composition, Accepted(inline_comment_event(page_id="some-other-page"), tenant))
+
+    assert composition.orchestrator.calls == [], "a comment off the tracked draft touches no run"
 
 
 async def test_a_rename_correction_of_a_wrong_named_prd_re_enters_the_flow() -> None:

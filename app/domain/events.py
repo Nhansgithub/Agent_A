@@ -34,6 +34,13 @@ class EventType(StrEnum):
     """A page was deleted (moved to trash). Used to detect a UserDoc draft being removed mid-flow so
     the agent can restore/recreate it and alert the PM (FR-16), rather than silently stranding the run."""
 
+    CONFLUENCE_INLINE_COMMENT_CREATED = "confluence.inline_comment_created"
+    """A comment was added to a page. Used to detect a reviewer's inline note on a UserDoc draft so the
+    agent can pick it up as feedback on the Jira Review ticket, @-mentioning the exact commenter and
+    restating it as Section / Issue / Suggested change (FR-17). The Confluence "Page commented"
+    Automation trigger fires for both inline and footer comments; the agent tells them apart by reading
+    the comment (only an inline comment carries a highlighted-passage anchor)."""
+
     JIRA_COMMENT_CREATED = "jira.comment_created"
     JIRA_ISSUE_UPDATED = "jira.issue_updated"
 
@@ -94,6 +101,36 @@ class ConfluencePageEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfluenceCommentEvent:
+    """A comment created on a Confluence page (FR-17 inline-feedback channel).
+
+    Carries only what the Automation "Page commented" trigger can supply as smart values — the comment
+    id, its page, the author, and the (possibly HTML) body. It is deliberately thin: the *section*
+    anchor and whether the comment is genuinely inline are not smart values, so the orchestrator reads
+    the full comment through the adapter before acting. Deduped on the comment id alone, like a Jira
+    comment — a comment id is globally unique, so no version marker is needed.
+    """
+
+    event_type: EventType
+    comment_id: str
+    page_id: str
+    author_account_id: str = ""
+    body_text: str = ""
+    space_key: str | None = None
+    """Optional, for AD-3 routing. The comment payload rarely carries the page's container folder, so
+    a single-tenant deployment routes by the fallback; a multi-tenant one should send the space key."""
+
+    @property
+    def entity_id(self) -> str:
+        """A comment id is globally unique, so it needs no version marker."""
+        return self.comment_id
+
+    @property
+    def version_marker(self) -> str:
+        return ""
+
+
+@dataclass(frozen=True, slots=True)
 class JiraCommentEvent:
     """A comment created on a Jira issue (FR-09 feedback, EH-02 admin resume)."""
 
@@ -147,4 +184,6 @@ class JiraIssueUpdatedEvent:
         return self.transitioned_status and (self.status_category or "").lower() == "done"
 
 
-WebhookEvent = ConfluencePageEvent | JiraCommentEvent | JiraIssueUpdatedEvent
+WebhookEvent = (
+    ConfluencePageEvent | ConfluenceCommentEvent | JiraCommentEvent | JiraIssueUpdatedEvent
+)

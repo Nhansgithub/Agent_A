@@ -22,6 +22,7 @@ from fastapi import APIRouter, Request, Response
 from app.agents.error_handler import ErrorHandler, is_resume_request
 from app.composition import Composition
 from app.domain.events import (
+    ConfluenceCommentEvent,
     ConfluencePageEvent,
     JiraCommentEvent,
     JiraIssueUpdatedEvent,
@@ -77,6 +78,8 @@ async def _dispatch(composition: Composition, result) -> None:
             # A page event that admits a *new* PRD records its dedupe key inside `admit` (AD-9), so it
             # is not recorded again here. A re-entry (renamed page) records after its work, below.
             run_result = await _dispatch_page(composition, event, tenant)
+    elif isinstance(event, ConfluenceCommentEvent):
+        run_result = await _dispatch_confluence_comment(composition, event, tenant)
     elif isinstance(event, JiraCommentEvent):
         run_result = await _dispatch_comment(composition, event, tenant)
     elif isinstance(event, JiraIssueUpdatedEvent):
@@ -218,6 +221,38 @@ async def _dispatch_page_trashed(composition: Composition, event: ConfluencePage
         "draft page %s for run %s was trashed; asking the PM (FR-16)", event.page_id, prd_id
     )
     return await composition.orchestrator.apply_draft_deleted(prd_id, event.page_id)
+
+
+async def _dispatch_confluence_comment(
+    composition: Composition, event: ConfluenceCommentEvent, tenant
+):
+    """A comment on a Confluence page (FR-17). Act on it only if it is on a tracked UserDoc draft.
+
+    The "Page commented" Automation trigger is page-wide and fires for every comment in the space —
+    footer or inline, on any page. The single admission gate is ownership: the comment's page must be a
+    run's current `userdoc_page_id`. A comment on a source PRD, a published doc, or an unrelated page
+    resolves to no run and is ignored. Whether the comment is genuinely *inline* (vs a page-level
+    footer comment) is decided later by the orchestrator, which reads the comment through the adapter.
+    """
+    prd_id = _find_prd_by_userdoc_page(composition.repository, event.page_id)
+    if prd_id is None:
+        logger.info(
+            "comment %s is on page %s, not a tracked UserDoc draft; ignored",
+            event.comment_id,
+            event.page_id,
+        )
+        return None
+    logger.info(
+        "comment %s on draft %s (run %s); picking it up as feedback (FR-17)",
+        event.comment_id,
+        event.page_id,
+        prd_id,
+    )
+    return await composition.orchestrator.apply_inline_comment(
+        prd_id,
+        comment_id=event.comment_id,
+        commenter_account_id=event.author_account_id,
+    )
 
 
 async def _page_is_trashed(composition: Composition, page_id: str, tenant) -> bool:

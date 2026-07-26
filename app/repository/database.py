@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS prd_state (
     md_export_path            TEXT,
     pending_feedback          TEXT,
     pending_deletion_page_id  TEXT,
+    active_reviewer_account_id TEXT,
     restriction_applied_at    TEXT,
     moved_to_published_at     TEXT,
     md_exported_at            TEXT,
@@ -83,6 +84,7 @@ CREATE INDEX IF NOT EXISTS idx_processed_events_prd ON processed_events (prd_id)
 #: (an existing row has no value for a new column).
 _ADDED_COLUMNS: dict[str, str] = {
     "pending_deletion_page_id": "pending_deletion_page_id TEXT",  # FR-16
+    "active_reviewer_account_id": "active_reviewer_account_id TEXT",  # FR-17
 }
 
 

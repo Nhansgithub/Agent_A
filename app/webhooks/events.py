@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.events import (
+    ConfluenceCommentEvent,
     ConfluencePageEvent,
     EventType,
     JiraCommentEvent,
@@ -23,12 +24,14 @@ from app.domain.events import (
 )
 
 __all__ = [
+    "ConfluenceCommentEvent",
     "ConfluencePageEvent",
     "EventType",
     "JiraCommentEvent",
     "JiraIssueUpdatedEvent",
     "UnsupportedEvent",
     "WebhookEvent",
+    "parse_confluence_comment_event",
     "parse_confluence_page_event",
     "parse_event",
     "parse_jira_comment_event",
@@ -142,6 +145,29 @@ def _extract_labels(page: dict[str, Any]) -> list[str]:
     return labels
 
 
+def parse_confluence_comment_event(payload: dict[str, Any]) -> ConfluenceCommentEvent:
+    """Parse a Confluence "Page commented" Automation payload (FR-17).
+
+    The rule sends the comment id + its page (and, ideally, the author and body). The section anchor
+    and inline-vs-footer distinction are **not** smart values, so they are left to the adapter's
+    follow-up read; this parser only needs to identify which comment on which page.
+    """
+    comment = payload.get("comment") if isinstance(payload.get("comment"), dict) else {}
+    page = payload.get("page") if isinstance(payload.get("page"), dict) else {}
+    return ConfluenceCommentEvent(
+        event_type=EventType.CONFLUENCE_INLINE_COMMENT_CREATED,
+        comment_id=_require(_first(comment, "id"), "comment.id"),
+        page_id=_require(
+            _first(page, "id") or _first(comment, "pageId", "container.id"), "page.id"
+        ),
+        author_account_id=str(
+            _first(comment, "author.accountId", "author.publicName", "authorId") or ""
+        ),
+        body_text=_comment_text(comment.get("body")),
+        space_key=_first(page, "spaceKey", "space.key"),
+    )
+
+
 def parse_jira_comment_event(payload: dict[str, Any]) -> JiraCommentEvent:
     comment = payload.get("comment") or {}
     issue = payload.get("issue") or {}
@@ -209,6 +235,9 @@ _PARSERS: dict[str, Any] = {
     "page_trashed": parse_confluence_page_event,
     "page_removed": parse_confluence_page_event,
     "page_deleted": parse_confluence_page_event,
+    # The Confluence "Page commented" Automation rule uses this distinct marker (the native Confluence
+    # `comment_created` is not reachable via Automation) so it never collides with Jira's below.
+    "page_commented": parse_confluence_comment_event,
     "comment_created": parse_jira_comment_event,
     "jira:issue_updated": parse_jira_issue_updated_event,
     "issue_updated": parse_jira_issue_updated_event,
@@ -227,6 +256,9 @@ def parse_event(payload: dict[str, Any]) -> WebhookEvent:
         # Some Automation-rule payloads omit `webhookEvent`; fall back to structural detection.
         if "comment" in payload and "issue" in payload:
             parser = parse_jira_comment_event
+        elif "comment" in payload and "page" in payload:
+            # A Confluence comment carries `comment` + `page` (never `issue`) — FR-17.
+            parser = parse_confluence_comment_event
         elif "changelog" in payload and "issue" in payload:
             parser = parse_jira_issue_updated_event
         else:

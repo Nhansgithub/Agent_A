@@ -96,6 +96,20 @@ round-trip Atlassian and LLM calls, advance explicit stages. Everything downstre
 
 ---
 
+## Post-readiness hardening additions (Nhan requests, 2026-07-25/26)
+
+Features added after the readiness report, each spec'd into the PRD + Spine and fully tested offline.
+
+| ID | Feature | Governed by | Status | Evidence |
+|---|---|---|---|---|
+| H-1 | Conversational review loop (interpreter gets transcript + memory) | FR-10a, D-30 | **DONE** | `interpret_comment` + `_review_conversation`; conversation-aware routing tests in `test_review_loop.py`. |
+| H-2 | Rename-churn guard + source-folder admission gate | FR-01a, AD-24, D-35 | **DONE** | `_dispatch_page` churn guard; `test_webhook_dispatch.py` rename-after-drafting tests. |
+| H-3 | Draft-deletion detection + human-gated recovery | FR-16, AD-25, D-36/D-38 | **DONE** | `apply_draft_deleted`/`apply_deletion_decision`; `test_draft_recovery.py`. **Needs the *Page trashed* Automation rule live.** |
+| H-4 | Tracking-ticket search: don't adopt another run's same-named ticket | FR-04, D-39 | **DONE** | `_search_by_name` excludes `agent-generated`; typed marker search; `test_ticket_manager.py`. |
+| H-5 | Inline-comment feedback channel | FR-17, AD-26, D-40 | **DONE (code+tests); live-activation pending** | `ConfluenceCommentEvent` + `get_inline_comment` + `apply_inline_comment`; `test_inline_comment.py` (20 tests). **Needs the *Page commented* Automation rule (SETUP-GUIDE 7c) + redeploy.** |
+
+---
+
 ## Carry-forward watch items (from the readiness report §7)
 
 1. **Classifier accuracy is the one hard, measurable gate** (0 FP / 0 FN on *holdout*, S2.4). Riskiest

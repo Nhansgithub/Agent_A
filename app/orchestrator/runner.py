@@ -159,6 +159,70 @@ class Orchestrator:
             # is parked (structure-confirm / clarification) and this is a no-op.
             return await self._advance_unlocked(prd_id)
 
+    async def apply_inline_comment(
+        self, prd_id: str, *, comment_id: str, commenter_account_id: str = ""
+    ) -> RunResult:
+        """A reviewer left a Confluence inline comment on the draft (FR-17).
+
+        Reads the comment (its highlighted-passage section, author, and body), restates it as
+        Section / Issue / Suggested change — **proposing a fix if the reviewer gave none** — and posts
+        that on the Jira Review ticket, @-mentioning the **exact commenter** (never the config PM) and
+        asking them to confirm. Parks awaiting their confirmation (`AWAITING_STRUCTURE_CONFIRM`); from
+        there the ordinary conversation-aware loop (`apply_pm_comment`) drives the back-and-forth to
+        finalize the change. Only acts on a run under review. Under the serial lock (AD-5).
+        """
+        async with self._lock:
+            state = self._repository.state.require(prd_id)
+            if state.stage not in _REVIEW_STAGES:
+                # EH-06 — a comment outside the review window is not processed.
+                return RunResult(
+                    prd_id,
+                    state.stage,
+                    stopped_reason=(
+                        f"inline comment ignored: run is at {state.stage.value}, not in review"
+                    ),
+                )
+            if state.pending_deletion_page_id:
+                # A draft-deletion decision is outstanding — an inline note must not derail that gate.
+                return RunResult(
+                    prd_id, state.stage, stopped_reason="inline comment ignored: deletion pending"
+                )
+
+            context = self._context_factory(state)
+            try:
+                comment = await context.read_inline_comment(comment_id)
+                restatement = await context.restate_inline_comment(
+                    section=comment.section,
+                    comment_text=comment.body_text,
+                    metadata=self._llm_metadata(state, "feedback_interpreter"),
+                )
+                commenter = (
+                    comment.author_account_id
+                    or commenter_account_id
+                    or context.tenant.pm_account_id
+                )
+                if state.review_ticket_key:
+                    await context.post_comment(
+                        state.review_ticket_key,
+                        self._inline_comment_body(context, restatement, commenter),
+                    )
+                self._repository.state.advance_stage(
+                    prd_id,
+                    Stage.AWAITING_STRUCTURE_CONFIRM,
+                    pending_gate=PendingGate.PM_STRUCTURE_CONFIRM,
+                    queue_status=QueueStatus.IDLE,
+                    pending_feedback=restatement.structured_feedback,
+                    active_reviewer_account_id=commenter,
+                )
+            except AgentError as error:
+                return self._to_error(prd_id, state, error)
+
+            return RunResult(
+                prd_id,
+                Stage.AWAITING_STRUCTURE_CONFIRM,
+                stopped_reason="asked the inline commenter to confirm the feedback",
+            )
+
     async def apply_gate_done(self, prd_id: str, *, issue_key: str) -> RunResult:
         """A human moved a gate ticket to a Done-category status (FR-12 / FR-14, AD-15).
 
@@ -420,18 +484,23 @@ class Orchestrator:
 
     async def _act_on_feedback(self, prd_id, state, context, decision, outcome) -> None:
         """Persist the routing outcome. The *decision* is the LLM's; the *routing* is deterministic."""
+        # FR-17 — address the person actually in this conversation. For an inline-comment thread that
+        # is the exact commenter (`active_reviewer_account_id`); for an ordinary Jira thread it is the
+        # configured Reviewer PM. Cleared when the sub-conversation resolves (apply or abandon).
+        reviewer = state.active_reviewer_account_id or context.tenant.pm_account_id
         if outcome.action is FeedbackAction.APPLY_FEEDBACK:
             feedback = decision.structured_feedback.strip() or (state.pending_feedback or "")
             self._repository.state.advance_stage(
                 prd_id,
                 Stage.REVISING,
                 pending_feedback=feedback,
+                active_reviewer_account_id=None,
                 queue_status=QueueStatus.IN_PROGRESS,
             )
         elif outcome.action is FeedbackAction.ASK_STRUCTURE_CONFIRM:
             await context.post_comment(
                 state.review_ticket_key or "",
-                self._structure_confirm_body(context, decision),
+                self._structure_confirm_body(context, decision, reviewer),
             )
             self._repository.state.advance_stage(
                 prd_id,
@@ -442,7 +511,7 @@ class Orchestrator:
             )
         elif outcome.action is FeedbackAction.ASK_CLARIFICATION:
             await context.post_comment(
-                state.review_ticket_key or "", self._clarification_body(context, decision)
+                state.review_ticket_key or "", self._clarification_body(context, decision, reviewer)
             )
             self._repository.state.advance_stage(
                 prd_id,
@@ -458,7 +527,7 @@ class Orchestrator:
             # that to APPLY / CONFIRM_STRUCTURE with the correction already applied.
             if decision.route is FeedbackRoute.CONFIRMATION:
                 await context.post_comment(
-                    state.review_ticket_key or "", self._not_confirmed_body(context)
+                    state.review_ticket_key or "", self._not_confirmed_body(context, reviewer)
                 )
             self._repository.state.advance_stage(
                 prd_id,
@@ -466,15 +535,51 @@ class Orchestrator:
                 pending_gate=outcome.gate,
                 queue_status=QueueStatus.IDLE,
                 pending_feedback=None,  # the rejected restatement is stale — don't carry it forward
+                active_reviewer_account_id=None,  # the sub-conversation is over
             )
 
     @staticmethod
-    def _structure_confirm_body(context, decision) -> dict:
+    def _inline_comment_body(context, restatement, commenter_account_id: str) -> dict:
+        """FR-17 — notify the exact inline commenter on the Review ticket and confirm the restatement."""
+        from app.domain import adf
+
+        section = restatement.section.strip() or "the draft"
+        if len(section) > 120:
+            section = section[:117] + "…"
+        if restatement.solution_proposed:
+            ask = adf.paragraph(
+                adf.text("You didn't include a fix, so I've "),
+                adf.strong("proposed one above"),
+                adf.text(
+                    " — does that capture what you meant? Reply here to confirm, tweak it, or tell "
+                    "me more, and I'll refine it with you before I touch the draft."
+                ),
+            )
+        else:
+            ask = adf.paragraph(
+                adf.text(
+                    "Is this what you meant? Reply here to confirm, adjust, or add more — I'll "
+                    "refine it with you before I change the draft."
+                )
+            )
+        return adf.doc(
+            adf.paragraph(
+                adf.mention(commenter_account_id),
+                adf.text(" I picked up your comment on the draft, on "),
+                adf.strong(section),
+                adf.text(". Here's how I understood it:"),
+            ),
+            adf.code_block(restatement.structured_feedback or "(no structured feedback)"),
+            ask,
+        )
+
+    @staticmethod
+    def _structure_confirm_body(context, decision, mention_id: str | None = None) -> dict:
         from app.domain import adf
 
         return adf.doc(
             adf.paragraph(
-                adf.mention(context.tenant.pm_account_id),
+                adf.mention(mention_id or context.tenant.pm_account_id),
                 adf.text(
                     " you didn't use the feedback format, so I curated it like this — is this what "
                     "you mean? I won't change anything until you confirm."
@@ -485,24 +590,24 @@ class Orchestrator:
         )
 
     @staticmethod
-    def _clarification_body(context, decision) -> dict:
+    def _clarification_body(context, decision, mention_id: str | None = None) -> dict:
         from app.domain import adf
 
         return adf.doc(
             adf.paragraph(
-                adf.mention(context.tenant.pm_account_id),
+                adf.mention(mention_id or context.tenant.pm_account_id),
                 adf.text(" before I revise, I need to check one thing:"),
             ),
             adf.paragraph(adf.text(decision.question or "Could you clarify?")),
         )
 
     @staticmethod
-    def _not_confirmed_body(context) -> dict:
+    def _not_confirmed_body(context, mention_id: str | None = None) -> dict:
         from app.domain import adf
 
         return adf.doc(
             adf.paragraph(
-                adf.mention(context.tenant.pm_account_id),
+                adf.mention(mention_id or context.tenant.pm_account_id),
                 adf.text(
                     " understood — I won't apply that. Tell me what you'd like changed instead. "
                     "The Section / Issue / Suggested change format is easiest for me, but plain "
