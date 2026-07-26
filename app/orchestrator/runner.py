@@ -372,7 +372,7 @@ class Orchestrator:
             adf.paragraph(
                 adf.mention(context.tenant.pm_account_id),
                 adf.text(
-                    " understood — I'll leave the draft deleted permanently and won't restore it. " 
+                    " understood — I'll leave the draft deleted permanently and won't restore it. "
                     "Please move this ticket to CANCELED status for clarity and tracability."
                 ),
             )
