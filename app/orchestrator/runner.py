@@ -340,7 +340,9 @@ class Orchestrator:
                 ),
                 adf.text("reply "),
                 adf.strong("“leave it”"),
-                adf.text(" if you meant to delete it. I won't touch the page until you say."),
+                adf.text(" if you meant to delete it "),
+                adf.strong("PERMANENTLY"),
+                adf.text(". I won't touch the page until you say."),
             )
         )
 
@@ -370,8 +372,8 @@ class Orchestrator:
             adf.paragraph(
                 adf.mention(context.tenant.pm_account_id),
                 adf.text(
-                    " understood — I'll leave the draft deleted and won't restore it. If you change "
-                    "your mind, say so here and I'll bring it back."
+                    " understood — I'll leave the draft deleted permanently and won't restore it." 
+                    " Please move this ticket to "Canceled" for clarity and tracability."
                 ),
             )
         )
