@@ -47,6 +47,9 @@ agent_b = [
     "fastembed>=0.8,<1",               # local ONNX embeddings for the RAG index (D-43); no torch
     "numpy>=2,<3",                     # brute-force cosine over the vector store (D-49)
     "slack-bolt>=1.18,<2",             # Slack Socket Mode Q&A surface (S-B7); live-gated (B-9)
+    "aiohttp>=3,<4",                   # REQUIRED by slack-bolt's async Socket Mode handler (it is the
+                                       # default backend of AsyncSocketModeHandler and is NOT pulled in
+                                       # by slack-bolt itself — without it the bot crash-loops at start).
 ]
 
 [build-system]
