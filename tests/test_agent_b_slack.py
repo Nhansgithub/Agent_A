@@ -109,8 +109,10 @@ async def test_mention_ignored_outside_allowed_channels() -> None:
 
 
 async def test_refusal_has_no_sources_section() -> None:
+    # The bot now replies warmly even when it has no doc — but with no grounded hits, no Sources.
+    warm = "I couldn't find a doc on that — want me to check onboarding instead?"
     config = _config(allowed=[])
-    handler, repo = _handler(config, "(unused)")
+    handler, repo = _handler(config, warm)
 
     # 'billing'/'invoice' are vocabulary the onboarding-only corpus doesn't contain → zero overlap.
     reply = await handler.handle_query(
@@ -124,8 +126,8 @@ async def test_refusal_has_no_sources_section() -> None:
     )
 
     assert reply is not None
-    assert reply.text == "I don't have a doc on that."  # plain refusal, no Sources
-    assert "*Sources:*" not in reply.text
+    assert reply.text == warm  # the warm reply is shown verbatim...
+    assert "*Sources:*" not in reply.text  # ...but with no grounded hits, no Sources section
     assert repo.get_qa(reply.qa_id)["refused"] == 1
     repo.close()
 

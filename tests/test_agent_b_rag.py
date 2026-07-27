@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_b.agents.answerer import REFUSAL, AnswererAgent
+from agent_b.agents.answerer import AnswererAgent
 from agent_b.config import AgentBConfig, load_agent_b_config
 from agent_b.qa import answer_question
 from agent_b.rag import chunk_text, index_vault, retrieve, strip_note_scaffolding
@@ -143,13 +143,15 @@ async def test_retrieval_finds_the_right_note_and_answers_with_citation() -> Non
     repo.close()
 
 
-async def test_unanswerable_question_refuses_without_calling_the_model() -> None:
+async def test_unanswerable_question_refuses_but_still_replies_warmly() -> None:
     repo = AgentBRepository.open(":memory:")
     _corpus(repo)
     embedder = FakeEmbedder()
     index_vault(repo, embedder, _config())
 
-    llm = FakeLlm("(should not be called)")
+    # The model IS called now (to craft a warm, guiding reply) — but nothing grounded is served, so
+    # the exchange is flagged `refused` (no citations) and the KB never fabricates an answer.
+    llm = FakeLlm("I couldn't find a doc on that, but I can help with onboarding or billing.")
     answerer = AnswererAgent(llm, model="test-model")
     result = await answer_question(
         "what is the company holiday policy?",  # no vocab overlap → below min_score
@@ -160,11 +162,11 @@ async def test_unanswerable_question_refuses_without_calling_the_model() -> None
         metadata=_meta(),
     )
 
-    assert result.refused
-    assert result.answer == REFUSAL
-    assert llm.calls == 0  # nothing retrieved above the floor → the model is never asked
+    assert result.refused  # no passage cleared the bar → no grounded answer / no sources
+    assert result.hits == ()
+    assert llm.calls == 1  # but the model was consulted to reply warmly (not a cold sentinel)
     row = repo.get_qa(result.qa_id)
-    assert row is not None and row["refused"] == 1 and row["answer"] is None
+    assert row is not None and row["refused"] == 1 and row["answer"] is not None
     repo.close()
 
 

@@ -836,3 +836,20 @@ Atlassian); no new architectural rule needed.
 re-hash notes non-deterministically); downloading *all* attachments (pulls non-image files nobody
 references); a global attachments dir (collisions across pages with same-named images).
 **Revisit if:** notes start referencing non-image attachments (PDFs) that should also be mirrored.
+
+### D-51 · The Answerer is conversational, not a cold refuser  (2026-07-28, owner request)
+**Context:** In production the bot answered "hey" and "list me the docs" with a blunt "I don't have a doc
+on that." — the flow short-circuited to a fixed refusal sentinel whenever retrieval scored below
+`min_score`, never calling the model. The owner wants a warm, supportive helper that still gives precise
+(grounded) answers.
+**Decision:** The Answerer now **always** calls the model (via its rewritten `SKILL.md` persona) and is
+given the retrieved passages **plus a catalog** of every live document (title + type). It greets, lists
+docs, and suggests the closest related docs when nothing matched — and replies in the **user's language**
+— but the hard rule is unchanged: it may only state document facts that appear in the passages (never
+fabricate, AD-30). `qa.answer_question` still derives `refused` from retrieval (top < `min_score`), so
+the eval (S-B9) semantics and the "no citations ⇒ no Sources" behaviour hold; only the *wording* warmed.
+**Alternatives rejected:** answering content questions from general knowledge when no doc matched (breaks
+grounding — the owner explicitly chose "say so warmly + guide"); keeping the no-LLM fast-refusal (the
+cold tone was the complaint). **Trade-off accepted:** every message now costs one (cheap) LLM call.
+**Revisit if:** cost or latency on trivial greetings becomes a concern (could add a lightweight
+greeting/smalltalk shortcut before the model call).

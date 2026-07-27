@@ -43,13 +43,19 @@ async def answer_question(
     user_id: str | None = None,
 ) -> QaResult:
     retrieval = retrieve(repo, embedder, question, config)
-    result = await answerer.answer(question, retrieval.hits, metadata=metadata)
-    refused = retrieval.refused or result.refused
+    # The catalog (every live doc's title + type) lets the answerer greet, list docs, and suggest the
+    # closest related docs when nothing matched — without inventing anything (SKILL keeps it grounded).
+    catalog = [(str(d["title"]), str(d["doc_type"])) for d in repo.all_documents()]
+    result = await answerer.answer(question, retrieval.hits, catalog, metadata=metadata)
+    # `refused` = no passage cleared the confidence bar, i.e. we did NOT serve a grounded doc answer.
+    # The reply is still warm (greeting / "couldn't find it, here's what's related") — refusal here
+    # means "no citations to show", which is why Sources are omitted for it.
+    refused = retrieval.refused
     hits = () if refused else retrieval.hits
     qa_id = repo.log_qa(
         correlation_id=metadata.correlation_id,
         question=question,
-        answer=None if refused else result.text,
+        answer=result.text,
         cited_page_ids=[h.page_id for h in hits],
         refused=refused,
         channel=channel,
