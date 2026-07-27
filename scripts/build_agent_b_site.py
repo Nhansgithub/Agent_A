@@ -24,7 +24,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main() -> int:
     from agent_b.config import load_agent_b_config_file
-    from agent_b.pipeline import render_custom_css, render_quartz_config, stage_content
+    from agent_b.pipeline import (
+        render_custom_css,
+        render_index_md,
+        render_quartz_config,
+        stage_content,
+    )
 
     parser = argparse.ArgumentParser(description="Stage the vault for a Quartz build (S-B5).")
     parser.add_argument(
@@ -52,8 +57,12 @@ def main() -> int:
     styles.mkdir(parents=True, exist_ok=True)
     (styles / "custom.scss").write_text(render_custom_css(), encoding="utf-8")
     staged = stage_content(config.vault_dir, str(quartz / "content"))
+    # Quartz builds the site root (index.html) only from content/index.md — the vault has none, so
+    # write one, or the homepage 404s (per-note URLs still resolve).
+    (quartz / "content" / "index.md").write_text(render_index_md(), encoding="utf-8")
     print(
-        f"staged {staged} note(s) into {quartz / 'content'}; wrote quartz.config.ts + custom.scss"
+        f"staged {staged} note(s) + index.md into {quartz / 'content'}; "
+        "wrote quartz.config.ts + custom.scss"
     )
 
     if args.build:

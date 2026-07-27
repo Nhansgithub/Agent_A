@@ -6,7 +6,12 @@ from agent_b.pipeline.convert import RenderedNote, note_vault_path, render_note,
 from agent_b.pipeline.crawler import CrawlItem, crawl
 from agent_b.pipeline.curate import CurationStats, curate_vault
 from agent_b.pipeline.linker import LinkStats, link_vault
-from agent_b.pipeline.publish import render_custom_css, render_quartz_config, stage_content
+from agent_b.pipeline.publish import (
+    render_custom_css,
+    render_index_md,
+    render_quartz_config,
+    stage_content,
+)
 from agent_b.pipeline.sync import PullResult, SyncStats, run_pull, sync_vault
 from agent_b.pipeline.vcs import GitVault, VaultVcs
 from agent_b.pipeline.writer import VaultWriter
@@ -31,8 +36,9 @@ __all__ = [
     "import_space",
     "link_vault",
     "note_vault_path",
-    "render_custom_css",
     "remove_page_assets",
+    "render_custom_css",
+    "render_index_md",
     "render_note",
     "render_quartz_config",
     "run_pull",

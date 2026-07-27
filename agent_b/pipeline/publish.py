@@ -69,6 +69,20 @@ export default config
 """
 
 
+def render_index_md() -> str:
+    """The vault has no landing page, but Quartz builds the site root (`index.html`) only from a
+    `content/index.md`. Without it the homepage 404s (per-note URLs still work). This is that page —
+    a thin welcome; the explorer, search, and graph do the actual navigation."""
+    return (
+        "---\n"
+        'title: "Internal Knowledge Base"\n'
+        "---\n\n"
+        "# Internal Knowledge Base\n\n"
+        "Search (top), or use the explorer and graph to browse. Every note here is generated from "
+        "Confluence — open a note and follow its source link to the original page.\n"
+    )
+
+
 def render_custom_css() -> str:
     """Styling shipped alongside the config so the AI-suggested callout reads as provisional."""
     return (

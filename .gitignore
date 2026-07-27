@@ -16,6 +16,10 @@ config/registry.yaml
 *.db-wal
 /data/
 
+# The Quartz checkout that deploy/build_site.sh clones locally for the S-B5 site build — a generated
+# working dir with its own .git, never part of this repo.
+/quartz/
+
 # Python
 .venv/
 __pycache__/

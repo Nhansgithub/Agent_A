@@ -8,6 +8,7 @@ from agent_b.config import AgentBConfig, load_agent_b_config
 from agent_b.pipeline import (
     link_vault,
     render_custom_css,
+    render_index_md,
     render_note,
     render_quartz_config,
     stage_content,
@@ -45,6 +46,14 @@ def test_quartz_config_injects_base_url_from_config_and_enables_features() -> No
 def test_custom_css_targets_the_suggested_callout() -> None:
     css = render_custom_css()
     assert "data-callout='tip'" in css  # the AI-suggested callout the linker emits (AD-30)
+
+
+def test_index_md_is_a_valid_landing_page() -> None:
+    index = render_index_md()
+    # Quartz needs a content/index.md or the site root 404s (the bug this fixes).
+    assert index.startswith("---\n")  # frontmatter present
+    assert 'title: "Internal Knowledge Base"' in index
+    assert "# Internal Knowledge Base" in index
 
 
 def test_stage_content_copies_notes_byte_for_byte_preserving_wikilinks(tmp_path: Path) -> None:
