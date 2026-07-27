@@ -2,7 +2,13 @@
 
 from agent_b.pipeline.assets import AssetFetcher, fetch_page_assets, remove_page_assets
 from agent_b.pipeline.bootstrap import BuildResult, ImportStats, build_vault, import_space
-from agent_b.pipeline.convert import RenderedNote, note_vault_path, render_note, slugify
+from agent_b.pipeline.convert import (
+    RenderedNote,
+    note_vault_path,
+    page_source_url,
+    render_note,
+    slugify,
+)
 from agent_b.pipeline.crawler import CrawlItem, crawl
 from agent_b.pipeline.curate import CurationStats, curate_vault
 from agent_b.pipeline.linker import LinkStats, link_vault
@@ -37,6 +43,7 @@ __all__ = [
     "import_space",
     "link_vault",
     "note_vault_path",
+    "page_source_url",
     "remove_page_assets",
     "render_custom_css",
     "render_index_md",

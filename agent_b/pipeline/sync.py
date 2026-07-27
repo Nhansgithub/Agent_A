@@ -23,7 +23,7 @@ from pathlib import Path
 
 from agent_b.config import AgentBConfig
 from agent_b.pipeline.assets import AssetFetcher, remove_page_assets
-from agent_b.pipeline.convert import render_note
+from agent_b.pipeline.convert import page_source_url, render_note
 from agent_b.pipeline.crawler import crawl
 from agent_b.pipeline.curate import CurationStats, curate_vault
 from agent_b.pipeline.linker import LinkStats, link_vault
@@ -82,7 +82,7 @@ async def sync_vault(
             doc_type=item.doc_type,
             parent_id=item.parent_id,
             space_key=config.space_key,
-            source_url=f"{base_url.rstrip('/')}/wiki/pages/{page.id}",
+            source_url=page_source_url(base_url, config.space_key, page.id),
             markdown=markdown,
         )
         existing = repo.get_document(page.id)

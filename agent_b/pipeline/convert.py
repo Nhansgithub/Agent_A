@@ -62,6 +62,15 @@ def note_vault_path(page_id: str, title: str) -> str:
     return f"notes/{name}.md"
 
 
+def page_source_url(base_url: str, space_key: str, page_id: str) -> str:
+    """The canonical Confluence Cloud page URL: `/wiki/spaces/<KEY>/pages/<id>`.
+
+    Confluence redirects that to the full title-slug URL. The bare `/wiki/pages/<id>` form does **not**
+    resolve for a viewer, which is why the note's `source_url` must carry the space key.
+    """
+    return f"{base_url.rstrip('/')}/wiki/spaces/{space_key}/pages/{page_id}"
+
+
 def _yaml_str(value: str) -> str:
     """A deterministic, safe double-quoted YAML scalar."""
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')

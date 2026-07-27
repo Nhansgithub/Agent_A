@@ -93,7 +93,8 @@ async def test_import_writes_notes_with_frontmatter(tmp_path: Path) -> None:
     prd_note = (tmp_path / "notes" / "P1-onboarding-prd.md").read_text(encoding="utf-8")
     assert 'doc_type: "prd"' in prd_note
     assert 'page_id: "P1"' in prd_note
-    assert 'source_url: "https://x.atlassian.net/wiki/pages/P1"' in prd_note
+    # Canonical Confluence URL — /wiki/spaces/<KEY>/pages/<id> (the bare /wiki/pages/<id> doesn't resolve).
+    assert 'source_url: "https://x.atlassian.net/wiki/spaces/PM/pages/P1"' in prd_note
     assert "Welcome aboard." in prd_note
 
     ud_note = (tmp_path / "notes" / "P3-how-to-onboard.md").read_text(encoding="utf-8")
