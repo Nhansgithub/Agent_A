@@ -26,18 +26,22 @@ def build_socket_mode_app(
     app = AsyncApp(token=bot_token)
 
     async def _answer(event: dict[str, Any], say: Any, *, is_dm: bool) -> None:
-        thread_ts = event.get("thread_ts") or event.get("ts") or ""
         query = SlackQuery(
             text=str(event.get("text") or ""),
             channel=str(event.get("channel") or ""),
             user=str(event.get("user") or ""),
-            thread_ts=str(thread_ts),
             is_dm=is_dm,
+            message_ts=str(event.get("ts") or ""),
+            thread_ts=str(event.get("thread_ts") or ""),
         )
         reply = await handler.handle_query(query)
         if reply is None:
             return
-        posted = await say(text=reply.text, thread_ts=reply.thread_ts)
+        # Only pass thread_ts when the handler chose to thread — a DM reply omits it, so it posts inline.
+        say_kwargs: dict[str, Any] = {"text": reply.text}
+        if reply.thread_ts:
+            say_kwargs["thread_ts"] = reply.thread_ts
+        posted = await say(**say_kwargs)
         posted_ts = (posted or {}).get("ts") if isinstance(posted, dict) else None
         if posted_ts:
             handler.remember(str(posted_ts), reply.qa_id)

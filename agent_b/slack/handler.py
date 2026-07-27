@@ -37,14 +37,17 @@ class SlackQuery:
     text: str
     channel: str
     user: str
-    thread_ts: str
     is_dm: bool
+    message_ts: str = (
+        ""  # the incoming message's own ts (used to open a thread under a channel mention)
+    )
+    thread_ts: str = ""  # the thread the incoming message is in, if any ("" = a top-level message)
 
 
 @dataclass(frozen=True, slots=True)
 class SlackReply:
     text: str
-    thread_ts: str
+    thread_ts: str | None  # None → post directly (no thread); a ts → post in that thread
     qa_id: int
 
 
@@ -90,7 +93,7 @@ class SlackQaHandler:
             channel=query.channel,
             user_id=query.user,
         )
-        return SlackReply(text=_format(result), thread_ts=query.thread_ts, qa_id=result.qa_id)
+        return SlackReply(text=_format(result), thread_ts=_reply_thread(query), qa_id=result.qa_id)
 
     def remember(self, message_ts: str, qa_id: int) -> None:
         """The app calls this after posting an answer, so a later reaction can find its `qa_log` row."""
@@ -108,6 +111,17 @@ class SlackQaHandler:
         else:
             return False
         return True
+
+
+def _reply_thread(query: SlackQuery) -> str | None:
+    """Where to post the reply. A message already inside a thread → stay in that thread (DM or channel).
+    Otherwise: a top-level DM replies **directly** (no thread, so it's plainly visible); a top-level
+    channel @-mention replies in a **new thread** under the mention (keeps the channel tidy)."""
+    if query.thread_ts:
+        return query.thread_ts
+    if query.is_dm:
+        return None  # top-level DM → reply inline, not in a thread
+    return query.message_ts or None  # channel mention → open a thread under the message
 
 
 def _format(result: QaResult) -> str:

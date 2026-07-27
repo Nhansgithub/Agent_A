@@ -73,16 +73,53 @@ async def test_dm_gets_a_grounded_reply_with_sources() -> None:
     handler, repo = _handler(config, "Onboard via the guided flow [1].")
 
     reply = await handler.handle_query(
-        SlackQuery(text="how do I onboard?", channel="D1", user="U1", thread_ts="t1", is_dm=True)
+        SlackQuery(text="how do I onboard?", channel="D1", user="U1", is_dm=True, message_ts="m1")
     )
 
     assert reply is not None
     assert "[1]" in reply.text
     assert "*Sources:*" in reply.text
     assert "<https://x/wiki/pages/P1|Onboarding PRD>" in reply.text  # Slack link to the note
-    assert reply.thread_ts == "t1"
+    assert reply.thread_ts is None  # top-level DM → replies inline, not in a thread
     row = repo.get_qa(reply.qa_id)
     assert row is not None and row["refused"] == 0
+    repo.close()
+
+
+async def test_dm_replies_inline_but_channel_mention_threads() -> None:
+    config = _config(allowed=["C_ALLOWED"])
+    handler, repo = _handler(config, "onboard via the flow [1]")
+
+    dm = await handler.handle_query(
+        SlackQuery(text="how do I onboard?", channel="D1", user="U1", is_dm=True, message_ts="m1")
+    )
+    mention = await handler.handle_query(
+        SlackQuery(
+            text="<@U0> how do I onboard?",
+            channel="C_ALLOWED",
+            user="U1",
+            is_dm=False,
+            message_ts="m2",
+        )
+    )
+    in_thread = await handler.handle_query(
+        SlackQuery(
+            text="how do I onboard?",
+            channel="D1",
+            user="U1",
+            is_dm=True,
+            message_ts="m3",
+            thread_ts="t9",
+        )
+    )
+
+    assert dm is not None and dm.thread_ts is None  # DM → inline
+    assert (
+        mention is not None and mention.thread_ts == "m2"
+    )  # channel → new thread under the mention
+    assert (
+        in_thread is not None and in_thread.thread_ts == "t9"
+    )  # already in a thread → stays there
     repo.close()
 
 
@@ -91,15 +128,15 @@ async def test_mention_ignored_outside_allowed_channels() -> None:
     handler, repo = _handler(config, "answer [1]")
 
     blocked = await handler.handle_query(
-        SlackQuery(text="<@U0> hi", channel="C_OTHER", user="U1", thread_ts="t1", is_dm=False)
+        SlackQuery(text="<@U0> hi", channel="C_OTHER", user="U1", is_dm=False, message_ts="m1")
     )
     allowed = await handler.handle_query(
         SlackQuery(
             text="<@U0> how do I onboard?",
             channel="C_ALLOWED",
             user="U1",
-            thread_ts="t2",
             is_dm=False,
+            message_ts="m2",
         )
     )
 
@@ -120,8 +157,8 @@ async def test_refusal_has_no_sources_section() -> None:
             text="how does billing invoice work?",
             channel="D1",
             user="U1",
-            thread_ts="t1",
             is_dm=True,
+            message_ts="m1",
         )
     )
 
@@ -136,7 +173,7 @@ async def test_thumbs_reaction_records_feedback() -> None:
     config = _config(allowed=[])
     handler, repo = _handler(config, "Onboard via the flow [1].")
     reply = await handler.handle_query(
-        SlackQuery(text="how do I onboard?", channel="D1", user="U1", thread_ts="t1", is_dm=True)
+        SlackQuery(text="how do I onboard?", channel="D1", user="U1", is_dm=True, message_ts="m1")
     )
     assert reply is not None
 
@@ -155,7 +192,7 @@ async def test_empty_question_is_ignored() -> None:
     config = _config(allowed=[])
     handler, repo = _handler(config, "x")
     reply = await handler.handle_query(
-        SlackQuery(text="<@U0>   ", channel="D1", user="U1", thread_ts="t1", is_dm=True)
+        SlackQuery(text="<@U0>   ", channel="D1", user="U1", is_dm=True, message_ts="m1")
     )
     assert reply is None  # a bare mention with no question → nothing to answer
     repo.close()
