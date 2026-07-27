@@ -47,7 +47,6 @@ COPY --from=build /opt/venv /opt/venv
 COPY --from=build /app/app /app/app
 COPY --from=build /app/agent_b /app/agent_b
 COPY scripts /app/scripts
-COPY fixtures /app/fixtures
 COPY config /app/config
 
 WORKDIR /app

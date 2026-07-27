@@ -37,11 +37,13 @@ __pycache__/
 .mypy_cache/
 
 # --- not needed at runtime ---------------------------------------------------------------------
+# NOTE: `scripts/` is deliberately NOT ignored — the Agent B image (deploy/Dockerfile.agent_b) runs
+# `scripts/run_agent_b_*.py` as its entrypoints. Agent A's Dockerfile simply never COPYs it, so
+# including it in the context costs nothing there.
 .git/
 .github/
 tests/
 fixtures/
-scripts/
 planning-artifacts/
 implementation-state/
 *.md

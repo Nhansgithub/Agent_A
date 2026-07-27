@@ -163,7 +163,9 @@ It runs as a **separate container** (`agent-b`) plus a nightly pull cron; Agent 
 
 **Prerequisites on the box:** the same `/opt/agent/.env` (now also holding the three `AGENTB_SLACK_*`
 keys) and `/opt/agent/config/registry.yaml` — make sure its `agent_b:` block matches your local
-`config/registry.yaml` (the folder ids, `allowed_channel_ids`, and **no** `embeddings.store` key).
+`config/registry.yaml` (the folder ids, `allowed_channel_ids`, and **no** `embeddings.store` key). The
+easy way to keep them matched: **`./deploy/push-config.sh`** (see "Keeping .env + registry.yaml in
+sync" below).
 
 ### 1. Build the Agent B image
 
@@ -203,3 +205,20 @@ QUARTZ_REF=v4.5.1 ./deploy/build_site.sh        # clones Quartz, stages the vaul
 
 Fill `fixtures/agent_b/golden.json` with real page ids (README there) and run
 `scripts/run_agent_b_eval.py` (API-gated) to bank the answer-quality bar.
+
+---
+
+## Keeping `.env` + `registry.yaml` in sync with the box
+
+These two files are **gitignored** — they hold secrets (`.env`) and one tenant's real ids
+(`config/registry.yaml`), so by design they never enter git, the image, or a registry (`.dockerignore`).
+They live in exactly two places: your laptop and the Droplet's `/opt/agent/`. So **whenever you edit
+either one locally, copy it up**:
+
+```bash
+./deploy/push-config.sh      # scp .env + config/registry.yaml → the box
+```
+
+Then restart so the containers re-read them (`.env` is read at container start; `registry.yaml` is
+mounted read-only): `./deploy/redeploy.sh && ./deploy/agent_b.sh`. Code changes ride in the image via
+CI; only these two files travel by `scp`.
