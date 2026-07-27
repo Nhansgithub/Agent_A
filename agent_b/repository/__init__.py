@@ -303,13 +303,16 @@ class AgentBRepository:
         refused: bool,
         channel: str | None = None,
         user_id: str | None = None,
+        conversation_key: str | None = None,
     ) -> int:
-        """Record one answered (or refused) question; returns the row id for a later feedback update."""
+        """Record one answered (or refused) question; returns the row id for a later feedback update.
+
+        `conversation_key` groups a DM / channel-thread so `recent_qa` can reconstruct memory."""
         with self._db.transaction() as conn:
             cursor = conn.execute(
                 "INSERT INTO qa_log "
                 "(correlation_id, channel, user_id, question, answer, cited_page_ids, refused, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "conversation_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     correlation_id,
                     channel,
@@ -318,10 +321,26 @@ class AgentBRepository:
                     answer,
                     json.dumps(list(cited_page_ids)),
                     1 if refused else 0,
+                    conversation_key,
                     to_iso(utc_now()),
                 ),
             )
             return int(cursor.lastrowid or 0)
+
+    def recent_qa(self, conversation_key: str, *, limit: int = 6) -> list[tuple[str, str]]:
+        """The last `limit` (question, answer) turns of a conversation, oldest-first — the memory the
+        answerer uses to resolve follow-ups. Skips rows with no answer text."""
+        if not conversation_key:
+            return []
+        with self._db.read() as conn:
+            rows = conn.execute(
+                "SELECT question, answer FROM qa_log WHERE conversation_key = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (conversation_key, limit),
+            ).fetchall()
+        turns = [(str(r["question"]), str(r["answer"] or "")) for r in rows if r["answer"]]
+        turns.reverse()  # chronological
+        return turns
 
     def set_qa_feedback(self, qa_id: int, feedback: str) -> None:
         """Record a 👍/👎 (`up`/`down`) against a logged answer (S-B7)."""

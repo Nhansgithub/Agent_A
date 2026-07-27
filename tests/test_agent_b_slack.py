@@ -19,8 +19,10 @@ from tests.test_agent_b_rag import FakeEmbedder
 class FakeLlm:
     def __init__(self, text: str) -> None:
         self._text = text
+        self.prompts: list[str] = []
 
     async def complete(self, *, model, system, prompt, metadata):  # noqa: ANN001, ARG002
+        self.prompts.append(prompt)
         return SimpleNamespace(text=self._text, model=model, input_tokens=1, output_tokens=1)
 
 
@@ -195,4 +197,51 @@ async def test_empty_question_is_ignored() -> None:
         SlackQuery(text="<@U0>   ", channel="D1", user="U1", is_dm=True, message_ts="m1")
     )
     assert reply is None  # a bare mention with no question → nothing to answer
+    repo.close()
+
+
+async def test_conversation_memory_flows_across_dm_messages() -> None:
+    config = _config(allowed=[])
+    repo = AgentBRepository.open(":memory:")
+    embedder = FakeEmbedder()
+    _seed_and_index(repo, embedder, config)
+    llm = FakeLlm("Onboard via the guided flow [1].")
+    handler = SlackQaHandler(
+        repo=repo, embedder=embedder, answerer=AnswererAgent(llm, model="test-model"), config=config
+    )
+
+    await handler.handle_query(
+        SlackQuery(text="how do I onboard?", channel="D1", user="U1", is_dm=True, message_ts="m1")
+    )
+    await handler.handle_query(
+        SlackQuery(text="tell me more", channel="D1", user="U1", is_dm=True, message_ts="m2")
+    )
+
+    # Both turns are grouped under the DM channel key, and the 2nd message's prompt carried the 1st.
+    assert len(repo.recent_qa("D1")) == 2
+    assert "Recent conversation" in llm.prompts[-1]
+    assert "how do I onboard?" in llm.prompts[-1]
+    repo.close()
+
+
+async def test_channel_threads_are_separate_conversations() -> None:
+    config = _config(allowed=["C1"])
+    repo = AgentBRepository.open(":memory:")
+    embedder = FakeEmbedder()
+    _seed_and_index(repo, embedder, config)
+    handler = SlackQaHandler(
+        repo=repo,
+        embedder=embedder,
+        answerer=AnswererAgent(FakeLlm("answer [1]"), model="test-model"),
+        config=config,
+    )
+
+    # Two different threads in the same channel → two separate conversations (keyed by thread root).
+    await handler.handle_query(
+        SlackQuery(text="<@U0> q1", channel="C1", user="U1", is_dm=False, message_ts="t1")
+    )
+    await handler.handle_query(
+        SlackQuery(text="<@U0> q2", channel="C1", user="U1", is_dm=False, message_ts="t2")
+    )
+    assert len(repo.recent_qa("t1")) == 1 and len(repo.recent_qa("t2")) == 1  # not merged
     repo.close()

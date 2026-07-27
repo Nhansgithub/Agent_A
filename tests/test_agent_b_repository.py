@@ -67,3 +67,92 @@ def test_missing_document_is_none() -> None:
     assert repo.get_document("nope") is None
     assert repo.document_ids() == []
     repo.close()
+
+
+def test_recent_qa_returns_conversation_turns_in_order() -> None:
+    repo = AgentBRepository.open(":memory:")
+    # Two conversations interleaved; recent_qa must isolate one and return it oldest-first.
+    repo.log_qa(
+        correlation_id="c1",
+        question="how do I onboard?",
+        answer="Press the button.",
+        cited_page_ids=["P1"],
+        refused=False,
+        conversation_key="dmA",
+    )
+    repo.log_qa(
+        correlation_id="c2",
+        question="unrelated",
+        answer="Elsewhere.",
+        cited_page_ids=[],
+        refused=False,
+        conversation_key="dmB",
+    )
+    repo.log_qa(
+        correlation_id="c3",
+        question="why?",
+        answer="Because it syncs.",
+        cited_page_ids=["P1"],
+        refused=False,
+        conversation_key="dmA",
+    )
+
+    turns = repo.recent_qa("dmA", limit=6)
+    assert turns == [
+        ("how do I onboard?", "Press the button."),
+        ("why?", "Because it syncs."),
+    ]
+    assert repo.recent_qa("dmB") == [("unrelated", "Elsewhere.")]
+    assert repo.recent_qa("never-seen") == []
+    repo.close()
+
+
+def test_recent_qa_windows_to_the_limit() -> None:
+    repo = AgentBRepository.open(":memory:")
+    for i in range(10):
+        repo.log_qa(
+            correlation_id=f"c{i}",
+            question=f"q{i}",
+            answer=f"a{i}",
+            cited_page_ids=[],
+            refused=False,
+            conversation_key="k",
+        )
+    turns = repo.recent_qa("k", limit=3)
+    assert turns == [("q7", "a7"), ("q8", "a8"), ("q9", "a9")]  # the 3 most recent, chronological
+    repo.close()
+
+
+def test_migration_adds_conversation_key_to_a_pre_existing_qa_log(tmp_path) -> None:
+    import sqlite3
+
+    # A store created before the column existed: the OLD qa_log schema, with one row already in it.
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    raw.execute(
+        "CREATE TABLE qa_log (id INTEGER PRIMARY KEY AUTOINCREMENT, correlation_id TEXT NOT NULL, "
+        "channel TEXT, user_id TEXT, question TEXT NOT NULL, answer TEXT, cited_page_ids TEXT, "
+        "refused INTEGER NOT NULL DEFAULT 0, feedback TEXT, created_at TEXT NOT NULL)"
+    )
+    raw.execute(
+        "INSERT INTO qa_log (correlation_id, question, answer, created_at) VALUES (?, ?, ?, ?)",
+        ("c0", "old question", "old answer", "2026-01-01T00:00:00+00:00"),
+    )
+    raw.commit()
+    raw.close()
+
+    # Opening it the normal way runs the migration: the column is added, old data survives, and the
+    # new memory path works — no rebuild of the live DB needed.
+    repo = AgentBRepository.open(str(path))
+    repo.log_qa(
+        correlation_id="c1",
+        question="new",
+        answer="new a",
+        cited_page_ids=[],
+        refused=False,
+        conversation_key="dmA",
+    )
+    assert repo.recent_qa("dmA") == [("new", "new a")]
+    with repo._db.read() as conn:  # the pre-existing row is still there
+        assert conn.execute("SELECT COUNT(*) AS n FROM qa_log").fetchone()["n"] == 2
+    repo.close()

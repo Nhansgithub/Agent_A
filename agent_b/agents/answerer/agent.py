@@ -49,21 +49,35 @@ class AnswererAgent:
         catalog: Sequence[tuple[str, str]],
         *,
         metadata: CallMetadata,
+        history: Sequence[tuple[str, str]] = (),
     ) -> AnswerResult:
         """Craft a reply. Always calls the model so greetings/refusals are warm; the SKILL keeps it
         grounded (it may only state doc facts that appear in `hits`). `catalog` = (title, doc_type) of
-        every live document, for listing and 'closest related' suggestions."""
+        every live document, for listing and 'closest related' suggestions. `history` = recent
+        (question, answer) turns of this conversation, so follow-ups like 'why?' / 'the second one'
+        resolve — memory helps it *understand* the question; it never becomes a source of doc facts."""
         response = await self._llm.complete(
             model=self._model,
             system=load_skill(_ROLE),
-            prompt=_build_prompt(question, hits, catalog),
+            prompt=_build_prompt(question, hits, catalog, history),
             metadata=metadata,
         )
         return AnswerResult(text=response.text.strip() or _FALLBACK)
 
 
-def _build_prompt(question: str, hits: Sequence[Hit], catalog: Sequence[tuple[str, str]]) -> str:
+def _build_prompt(
+    question: str,
+    hits: Sequence[Hit],
+    catalog: Sequence[tuple[str, str]],
+    history: Sequence[tuple[str, str]] = (),
+) -> str:
     lines: list[str] = []
+    if history:
+        lines.append("Recent conversation (oldest first) — use it to resolve follow-ups:")
+        for prev_q, prev_a in history:
+            lines.append(f"User: {prev_q}")
+            lines.append(f"You: {prev_a}")
+        lines.append("")
     if catalog:
         lines.append("Catalog — the documents currently in the knowledge base:")
         for title, doc_type in list(catalog)[:_MAX_CATALOG]:

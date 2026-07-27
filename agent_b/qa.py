@@ -12,6 +12,7 @@ a refusal logged, so the KB never presents a fabricated answer as grounded (AD-3
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from agent_b.agents.answerer import AnswererAgent
@@ -41,12 +42,23 @@ async def answer_question(
     metadata: CallMetadata,
     channel: str | None = None,
     user_id: str | None = None,
+    history: Sequence[tuple[str, str]] = (),
+    conversation_key: str | None = None,
 ) -> QaResult:
     retrieval = retrieve(repo, embedder, question, config)
+    # A referential follow-up ("why?", "the second one") retrieves nothing on its own. If the current
+    # message alone found no passage but we have conversation history, retry retrieval with the recent
+    # user turns folded in — so the follow-up pulls the docs the conversation is actually about. A
+    # self-contained question retrieves fine first time and never triggers this (no query dilution).
+    if retrieval.refused and history:
+        augmented = " ".join([q for q, _ in list(history)[-2:]] + [question])
+        retrieval = retrieve(repo, embedder, augmented, config)
     # The catalog (every live doc's title + type) lets the answerer greet, list docs, and suggest the
     # closest related docs when nothing matched — without inventing anything (SKILL keeps it grounded).
     catalog = [(str(d["title"]), str(d["doc_type"])) for d in repo.all_documents()]
-    result = await answerer.answer(question, retrieval.hits, catalog, metadata=metadata)
+    result = await answerer.answer(
+        question, retrieval.hits, catalog, metadata=metadata, history=history
+    )
     # `refused` = no passage cleared the confidence bar, i.e. we did NOT serve a grounded doc answer.
     # The reply is still warm (greeting / "couldn't find it, here's what's related") — refusal here
     # means "no citations to show", which is why Sources are omitted for it.
@@ -60,6 +72,7 @@ async def answer_question(
         refused=refused,
         channel=channel,
         user_id=user_id,
+        conversation_key=conversation_key,
     )
     return QaResult(
         qa_id=qa_id,

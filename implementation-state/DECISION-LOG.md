@@ -853,3 +853,22 @@ grounding — the owner explicitly chose "say so warmly + guide"); keeping the n
 cold tone was the complaint). **Trade-off accepted:** every message now costs one (cheap) LLM call.
 **Revisit if:** cost or latency on trivial greetings becomes a concern (could add a lightweight
 greeting/smalltalk shortcut before the model call).
+
+### D-52 · Conversation memory: thread-scoped, persisted via qa_log, grounding preserved  (2026-07-28, owner request)
+**Context:** The bot answered each message in isolation — no memory — so follow-ups ("why?", "the second
+one", "tell me more") had no referent. The owner wants multi-turn clarification in a DM/thread.
+**Decision:** Add short conversation memory. A `conversation_key` groups messages: a DM (keyed by its
+channel), each channel thread (keyed by its thread root). `qa_log` gains a `conversation_key` column
+(guarded `ALTER TABLE` migration — no live-DB rebuild) and a `recent_qa(key, limit=6)` read. On each
+message the Slack handler loads the last ~6 turns and passes them to the Answerer, which uses them (in a
+"Recent conversation" prompt block + the rewritten SKILL) to *understand* the message. Memory is **never
+a source of doc facts** — those still come only from the retrieved passages with `[n]` cites (AD-30). To
+make referential follow-ups retrieve the right docs, `qa.answer_question` retries retrieval with the
+recent user turns folded in **only when the current message alone matched nothing** (no query dilution
+for self-contained questions). Scope: DMs + channel threads (the owner's choice).
+**Alternatives rejected:** fetching history from the Slack API each turn (extra scopes + calls; qa_log
+already has it and survives restarts); an in-process cache (lost on restart, not shared); always
+augmenting the retrieval query with history (dilutes good self-contained queries).
+**Trade-off accepted:** one extra small read per message; memory is windowed to ~6 turns.
+**Revisit if:** conversations need summarization beyond a fixed window, or cross-conversation "what are
+we working on" memory is wanted (would need a longer-term store/summary).

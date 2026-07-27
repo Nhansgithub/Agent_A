@@ -30,6 +30,7 @@ from app.agents.llm import CallMetadata
 _MENTION = re.compile(r"<@[A-Z0-9]+>")
 _UP = frozenset({"+1", "thumbsup", "thumbsup_all"})
 _DOWN = frozenset({"-1", "thumbsdown"})
+_HISTORY_TURNS = 6  # how many recent (question, answer) turns of memory to give the answerer
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +84,10 @@ class SlackQaHandler:
         metadata = CallMetadata(
             correlation_id=uuid.uuid4().hex, prd_id="agent_b_kb", agent_role="answerer"
         )
+        # Conversation memory: a DM (or a channel thread) is one ongoing conversation. Load its recent
+        # turns so follow-ups resolve; the exchange is logged under the same key for the next turn.
+        key = _conversation_key(query)
+        history = self._repo.recent_qa(key, limit=_HISTORY_TURNS)
         result = await answer_question(
             question,
             repo=self._repo,
@@ -92,6 +97,8 @@ class SlackQaHandler:
             metadata=metadata,
             channel=query.channel,
             user_id=query.user,
+            history=history,
+            conversation_key=key,
         )
         return SlackReply(text=_format(result), thread_ts=_reply_thread(query), qa_id=result.qa_id)
 
@@ -111,6 +118,19 @@ class SlackQaHandler:
         else:
             return False
         return True
+
+
+def _conversation_key(query: SlackQuery) -> str:
+    """The id that groups messages into one conversation for memory (DMs + channel threads).
+
+    A threaded exchange is keyed by its thread; a top-level DM is one ongoing conversation keyed by its
+    channel; a top-level channel @-mention opens a thread, so its own message ts is that thread's root.
+    Mirrors `_reply_thread` so a message and the reply it will thread under share the same key."""
+    if query.thread_ts:
+        return query.thread_ts
+    if query.is_dm:
+        return query.channel
+    return query.message_ts
 
 
 def _reply_thread(query: SlackQuery) -> str | None:

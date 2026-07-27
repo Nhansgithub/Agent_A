@@ -66,16 +66,17 @@ CREATE TABLE IF NOT EXISTS llm_cache (
 -- Every Slack answer (AD-20 traceability + the S-B9 eval): the question, the cited notes, whether the
 -- bot refused, and the human's thumbs up/down.
 CREATE TABLE IF NOT EXISTS qa_log (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    correlation_id  TEXT NOT NULL,
-    channel         TEXT,
-    user_id         TEXT,
-    question        TEXT NOT NULL,
-    answer          TEXT,
-    cited_page_ids  TEXT,                 -- JSON array of page_ids
-    refused         INTEGER NOT NULL DEFAULT 0,
-    feedback        TEXT,                 -- up | down | (null)
-    created_at      TEXT NOT NULL
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    correlation_id    TEXT NOT NULL,
+    channel           TEXT,
+    user_id           TEXT,
+    question          TEXT NOT NULL,
+    answer            TEXT,
+    cited_page_ids    TEXT,               -- JSON array of page_ids
+    refused           INTEGER NOT NULL DEFAULT 0,
+    feedback          TEXT,               -- up | down | (null)
+    conversation_key  TEXT,               -- groups a DM / channel-thread into one conversation (memory)
+    created_at        TEXT NOT NULL
 );
 
 -- One row per scheduled pull (S-B4), for observability of the nightly job.
@@ -144,6 +145,18 @@ class AgentBDatabase:
     def _apply_schema(self) -> None:
         with self._lock:
             self._connection.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Additive, idempotent migrations for a store created before a column existed. `CREATE TABLE
+        IF NOT EXISTS` never alters an existing table, so a live DB needs the new column added by hand."""
+        columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(qa_log)")}
+        if "conversation_key" not in columns:  # added for conversation memory
+            self._connection.execute("ALTER TABLE qa_log ADD COLUMN conversation_key TEXT")
+        # Index created here (not in SCHEMA) so it never runs before the column exists on an old store.
+        self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_qa_conversation ON qa_log (conversation_key, id)"
+        )
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:

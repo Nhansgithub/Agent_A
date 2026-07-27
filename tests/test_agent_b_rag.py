@@ -211,3 +211,35 @@ def test_fastembed_smoke() -> None:  # pragma: no cover
 
     vecs = FastEmbedEmbedder("BAAI/bge-small-en-v1.5").embed(["hello world"])
     assert len(vecs) == 1 and len(vecs[0]) == 384
+
+
+async def test_followup_uses_history_to_retrieve_the_right_doc() -> None:
+    repo = AgentBRepository.open(":memory:")
+    _corpus(repo)  # P1 onboarding, P2 billing, P3 search
+    embedder = FakeEmbedder()
+    index_vault(repo, embedder, _config())
+    llm = FakeLlm("Because onboarding uses the guided flow [1].")
+    answerer = AnswererAgent(llm, model="test-model")
+
+    # A bare "why?" matches no doc on its own (below a strict floor) → would refuse. With history about
+    # onboarding, the augmented retry folds in the prior turn and finds the onboarding doc.
+    history = [("how do I onboard a new user?", "Use the guided flow.")]
+    result = await answer_question(
+        "why?",
+        repo=repo,
+        embedder=embedder,
+        answerer=answerer,
+        config=_config(base={"rag": {"top_k": 3, "min_score": 0.5, "graph_expansion_hops": 1}}),
+        metadata=_meta(),
+        history=history,
+        conversation_key="dmA",
+    )
+
+    assert not result.refused
+    assert (
+        result.hits and result.hits[0].page_id == "P1"
+    )  # reached only via the history-augmented retry
+    assert repo.recent_qa(
+        "dmA"
+    )  # the turn was logged under the conversation key for the next follow-up
+    repo.close()
