@@ -165,14 +165,18 @@ It runs as a **separate container** (`agent-b`) plus a nightly pull cron; Agent 
 keys) and `/opt/agent/config/registry.yaml` — make sure its `agent_b:` block matches your local
 `config/registry.yaml` (the folder ids, `allowed_channel_ids`, and **no** `embeddings.store` key).
 
-### 1. Build the Agent B image OFF the box and push (AD-21)
+### 1. Build the Agent B image
+
+**Automatic:** every push to `master` (or a `v*` tag) runs the CI `build-agent-b` job, which builds
+`deploy/Dockerfile.agent_b` and pushes `ghcr.io/<owner>/agent_b_bot:latest` — off the box (AD-21),
+only after tests pass. You normally do nothing here; just wait for green CI.
+
+Manual fallback (e.g. building a one-off locally — never on the 1 GB box, it can OOM):
 
 ```bash
 docker build -f deploy/Dockerfile.agent_b -t ghcr.io/nhansgithub/agent_b_bot:latest .
 docker push ghcr.io/nhansgithub/agent_b_bot:latest
 ```
-
-(Or add a CI job mirroring the Agent A `build` job. Building on the 1 GB box can OOM — don't.)
 
 ### 2. Deploy the bot + nightly pull
 

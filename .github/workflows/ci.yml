@@ -3,11 +3,13 @@
 # `test` runs on every push and PR: the fast offline gate — ruff lint + format check, the
 # architecture/licensing contracts, and the no-network test suite.
 #
-# `build` runs ONLY after `test` passes (`needs: test`) and ONLY on master or a `v*` tag. That
-# dependency is the whole point: the image the Droplet pulls is always built from green code. A
-# feature branch or PR runs the tests but never builds an image.
+# `build` (Agent A) and `build-agent-b` (Agent B) run ONLY after `test` passes (`needs: test`) and
+# ONLY on master or a `v*` tag. That dependency is the whole point: the images the Droplet pulls are
+# always built from green code. A feature branch or PR runs the tests but never builds an image.
 #
-# The image is built on the GitHub runner, never on the 1 GB Droplet (AD-21) — the box only pulls.
+# Two images because Agent A and Agent B are separate programs with separate deps — Agent A stays lean
+# (AD-21), Agent B carries the heavy embedding/Slack extra. Both are built on the GitHub runner, never
+# on the 1 GB Droplet (AD-21) — the box only pulls.
 
 name: CI
 
@@ -26,8 +28,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install (pinned runtime + dev extras)
-        run: pip install -e ".[dev]"
+      - name: Install (pinned runtime + dev + agent_b extras)
+        # The full offline suite exercises Agent B too, whose modules hard-import numpy (the RAG
+        # vector store, D-49). So the TEST environment needs the `agent_b` extra even though Agent A's
+        # runtime image never carries it (AD-21) — test-time deps and Agent A's shipped deps differ.
+        run: pip install -e ".[dev,agent_b]"
       - name: Ruff (lint + format check)
         run: |
           ruff check .
@@ -89,5 +94,43 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.name }}:latest,${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}
+
+  build-agent-b:
+    # Agent B's OWN image (Epic 7) — the Slack bot + nightly pull. Same gate as `build`: only from
+    # green code, only on master or a release tag. Separate image so Agent A stays lean (AD-21): this
+    # one carries the heavy `agent_b` extra (onnxruntime/fastembed). Built off the box, like Agent A.
+    needs: test
+    if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))) || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image name + version
+        id: image
+        run: |
+          # `<owner>/agent_b_bot`, owner lowercased (GHCR requires lowercase; the owner as typed on
+          # GitHub may not be). Distinct repo from Agent A's image so the two never collide.
+          echo "name=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/agent_b_bot" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=sha-$(echo '${{ github.sha }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent_b
           push: true
           tags: ${{ steps.image.outputs.name }}:latest,${{ steps.image.outputs.name }}:${{ steps.image.outputs.version }}

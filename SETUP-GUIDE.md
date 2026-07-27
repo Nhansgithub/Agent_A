@@ -641,3 +641,14 @@ Run the verifier one more time:
 
 When it is green, tell me and I will wire the live integration and run the end-to-end demo. Parts 1–6
 are enough to unblock nearly everything; Parts 7–8 are only needed for the final deployed run.
+
+# 1. Push (ships Agent A's S-B8/S-B10 changes; CI builds :latest)
+git push origin master
+./deploy/redeploy.sh                    # redeploy Agent A
+
+# 2. Build + push the Agent B image OFF the box (a build on 1 GB can OOM)
+docker build -f deploy/Dockerfile.agent_b -t ghcr.io/nhansgithub/agent_b_bot:latest .
+docker push ghcr.io/nhansgithub/agent_b_bot:latest
+
+# 3. Deploy Agent B (bot + nightly pull)
+./deploy/agent_b.sh
