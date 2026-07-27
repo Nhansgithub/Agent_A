@@ -9,7 +9,7 @@ from agent_b.pipeline.linker import LinkStats, link_vault
 from agent_b.pipeline.publish import (
     render_custom_css,
     render_index_md,
-    render_quartz_config,
+    set_quartz_base_url,
     stage_content,
 )
 from agent_b.pipeline.sync import PullResult, SyncStats, run_pull, sync_vault
@@ -40,8 +40,8 @@ __all__ = [
     "render_custom_css",
     "render_index_md",
     "render_note",
-    "render_quartz_config",
     "run_pull",
+    "set_quartz_base_url",
     "slugify",
     "stage_content",
     "sync_vault",

@@ -4,43 +4,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_b.config import AgentBConfig, load_agent_b_config
 from agent_b.pipeline import (
     link_vault,
     render_custom_css,
     render_index_md,
     render_note,
-    render_quartz_config,
+    set_quartz_base_url,
     stage_content,
 )
 from agent_b.repository import AgentBRepository
 
 
-def _config(vault_dir: Path, base_url: str = "https://agent.poetroastery.com") -> AgentBConfig:
-    cfg = load_agent_b_config(
-        {
-            "agent_b": {
-                "space_key": "PM",
-                "confluence_credentials_ref": "env:ALPHA_CONF",
-                "include_folder_ids": ["F"],
-                "vault_dir": str(vault_dir),
-                "publish": {"base_url": base_url},
-            }
-        }
+def test_set_quartz_base_url_patches_only_the_url() -> None:
+    # A stand-in for Quartz's own config: we replace only the baseUrl, preserving everything else.
+    default = (
+        "const config = {\n"
+        "  configuration: {\n"
+        '    pageTitle: "🪴 Quartz 4",\n'
+        '    baseUrl: "quartz.jzhao.xyz",\n'
+        "    theme: { colors: { lightMode: {} } },\n"
+        "  },\n"
+        "}\n"
     )
-    assert cfg is not None
-    return cfg
-
-
-def test_quartz_config_injects_base_url_from_config_and_enables_features() -> None:
-    ts = render_quartz_config(_config(Path("/tmp/v"), base_url="https://agent.poetroastery.com/"))
-    # baseUrl comes from config as the bare host — never a literal in code (AD-4).
-    assert 'baseUrl: "agent.poetroastery.com"' in ts
-    assert "https://" not in ts.split("baseUrl", 1)[1].split("\n", 1)[0]  # host only, no scheme
-    # graph/backlinks/search substrate: SPA + the Obsidian/CrawlLinks transformers + content index.
-    assert "enableSPA: true" in ts
-    assert "ObsidianFlavoredMarkdown" in ts and "CrawlLinks" in ts
-    assert "ContentIndex" in ts
+    out = set_quartz_base_url(default, "https://agent.poetroastery.com/")
+    assert 'baseUrl: "agent.poetroastery.com"' in out  # bare host, no scheme/slash (AD-4)
+    assert "quartz.jzhao.xyz" not in out  # the placeholder is gone
+    assert "theme: { colors" in out and 'pageTitle: "🪴 Quartz 4"' in out  # everything else intact
 
 
 def test_custom_css_targets_the_suggested_callout() -> None:

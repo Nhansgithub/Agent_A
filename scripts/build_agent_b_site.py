@@ -27,7 +27,7 @@ def main() -> int:
     from agent_b.pipeline import (
         render_custom_css,
         render_index_md,
-        render_quartz_config,
+        set_quartz_base_url,
         stage_content,
     )
 
@@ -52,7 +52,14 @@ def main() -> int:
         )
         return 1
 
-    (quartz / "quartz.config.ts").write_text(render_quartz_config(config), encoding="utf-8")
+    # Patch only the baseUrl in Quartz's OWN config (build_site.sh restores it to pristine first), so
+    # we keep Quartz's version-correct theme/layout/plugins — a hand-written config shipped an unstyled
+    # site (missing theme palette).
+    cfg_path = quartz / "quartz.config.ts"
+    cfg_path.write_text(
+        set_quartz_base_url(cfg_path.read_text(encoding="utf-8"), config.publish.base_url),
+        encoding="utf-8",
+    )
     styles = quartz / "quartz" / "styles"
     styles.mkdir(parents=True, exist_ok=True)
     (styles / "custom.scss").write_text(render_custom_css(), encoding="utf-8")

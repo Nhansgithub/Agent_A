@@ -26,7 +26,12 @@ fi
 
 ( cd "$QUARTZ_DIR" && npm ci )
 
-# Python owns the config generation + content staging (the unit-tested part, agent_b.pipeline.publish).
+# Restore Quartz's own config + stylesheet to the pinned version's pristine state before we patch them
+# — so a re-run over an already-edited clone always starts from Quartz's valid defaults (a prior bad
+# config would otherwise persist and keep shipping an unstyled site).
+git -C "$QUARTZ_DIR" checkout -- quartz.config.ts quartz/styles/custom.scss 2>/dev/null || true
+
+# Python patches baseUrl + writes custom.scss + stages the vault (the unit-tested part, publish.py).
 "$PY" "$ROOT/scripts/build_agent_b_site.py" --quartz-dir "$QUARTZ_DIR" --build
 
 echo "site built. Serve AgentBConfig.publish.output_dir via deploy/Caddyfile (agent.poetroastery.com)."
