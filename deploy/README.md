@@ -193,13 +193,17 @@ cushions the overlap. If it thrashes, resize to 2 GB (see above) or give Agent B
 
 ### 3. (Optional) The public KB site — S-B5
 
-Build the Quartz site off-box and serve the output at `agent.poetroastery.com` (read-only, no auth):
+One command, run from your **laptop** (needs Node/npm + ssh; the `agent.poetroastery.com` A-record must
+already point at the box):
 
 ```bash
-QUARTZ_REF=v4.5.1 ./deploy/build_site.sh        # clones Quartz, stages the vault, `npx quartz build`
-# rsync the built site to the box's /opt/agent/data/site, add an `agent.poetroastery.com` A record,
-# then reload Caddy — the vhost is already in deploy/Caddyfile.
+./deploy/site.sh
 ```
+
+It pulls the generated vault down from the box (a Node build can OOM the 1 GB box, so we build off it),
+builds the Quartz site, uploads it to `/opt/agent/data/site`, installs the Caddyfile (which carries the
+`agent.poetroastery.com` vhost — read-only, no auth, D-45), and reloads Caddy. Re-run it after any pull
+to refresh the site. `deploy/build_site.sh` is the build-only step it calls if you want it standalone.
 
 ### 4. (Optional) The Q&A eval gate — S-B9
 

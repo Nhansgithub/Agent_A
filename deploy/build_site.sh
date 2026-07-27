@@ -16,7 +16,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QUARTZ_DIR="${1:-$ROOT/quartz}"
 QUARTZ_REPO="${QUARTZ_REPO:-https://github.com/jackyzha0/quartz.git}"
-QUARTZ_REF="${QUARTZ_REF:-v4.5.1}"   # pin a known-good tag; bump deliberately, never float
+QUARTZ_REF="${QUARTZ_REF:-v4}"       # Quartz's default v4 branch (always exists); pin a tag via env
 PY="${PYTHON:-$ROOT/.venv/bin/python}"
 
 if [ ! -d "$QUARTZ_DIR/.git" ]; then
