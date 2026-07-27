@@ -1,0 +1,12 @@
+# Agent B nightly maintained pull (S-B4/S-B6). Mirrors deploy/reconcile.cron's mechanism: system cron
+# runs a short-lived job — no always-on scheduler competing for the 1 GB box's RAM (AD-21). The job
+# change-detects, reconciles deletions, curates, links, pulls image assets, re-indexes, and git-commits
+# the vault. It runs as a ONE-SHOT DOCKER CONTAINER from the same Agent B image the bot uses (the box
+# only runs Docker — there is no host venv). Same mounts as the bot so it shares the /data vault + db.
+#
+# deploy/agent_b.sh installs this line for you (with the concrete image ref). It is recorded here for
+# reference and to keep the cadence in sync with AgentBConfig.schedule_cron (nightly 03:00).
+#
+# Install manually with (substitute your image ref):
+#   crontab -l 2>/dev/null | cat - deploy/agent_b_pull.cron | crontab -
+0 3 * * * docker run --rm --env-file /opt/agent/.env -v /opt/agent/config:/app/config:ro -v /data:/app/data ghcr.io/nhansgithub/agent_b_bot:latest python scripts/run_agent_b_pull.py >> /var/log/agent-b-pull.log 2>&1

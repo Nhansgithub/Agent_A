@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1
+#
+# Agent B image (Epic 7) — the Slack Q&A bot + the nightly KB pull. SEPARATE from Agent A's image so
+# Agent A stays lean (AD-21): Agent B pulls in the `agent_b` extra (fastembed → onnxruntime + numpy +
+# slack-bolt), which Agent A must never carry.
+#
+# ⚠️  BUILD THIS OFF THE DROPLET (AD-21) — a build on the 1 GB box can OOM. Build on your laptop or in
+#     CI, push to the registry, and `docker pull` it on the box. See deploy/README.md → "Agent B".
+#
+# Runtime memory note: onnxruntime + the bge-small model are resident when the bot answers. On the 1 GB
+# box this runs alongside Agent A (capped 768m) and Caddy; deploy/agent_b.sh caps the bot at 512m and
+# the box's 2 GB swap (provision.sh) cushions the overlap. Watch memory, or give Agent B its own host.
+
+FROM python:3.12-slim AS build
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY pyproject.toml README.md ./
+COPY app ./app
+COPY agent_b ./agent_b
+# Install the package WITH the agent_b extra (fastembed + numpy + slack-bolt).
+RUN pip install ".[agent_b]"
+
+# ---------------------------------------------------------------------------------------------
+
+FROM python:3.12-slim AS runtime
+
+RUN useradd --create-home --uid 10001 agent
+# `git` is required at runtime: the nightly pull versions the vault with one commit per run (S-B4,
+# GitVault shells out to git). Kept minimal, no recommends.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/app/data/.cache
+
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build /app/app /app/app
+COPY --from=build /app/agent_b /app/agent_b
+COPY scripts /app/scripts
+COPY fixtures /app/fixtures
+COPY config /app/config
+
+WORKDIR /app
+# The box mounts host /data here (deploy/agent_b.sh: `-v /data:/app/data`), so the config's relative
+# `data/…` paths (vault, agent_b.db, the fastembed cache under HF_HOME) land on the persistent,
+# litestream-eligible volume and are shared between the bot container and the nightly pull job.
+RUN mkdir -p /app/data && chown -R agent:agent /app/data /app
+USER agent
+
+# Default process: the Slack Q&A bot over Socket Mode — it connects OUT to Slack (no inbound port, no
+# public URL). The nightly pull runs as a one-shot container (same image) via cron, not here.
+CMD ["python", "scripts/run_agent_b_slack.py"]

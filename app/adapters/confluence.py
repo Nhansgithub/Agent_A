@@ -21,7 +21,12 @@ from typing import Any
 from app.adapters.http import AtlassianClient
 from app.adapters.markdown import markdown_to_storage, storage_to_markdown
 from app.config.constants import AGENT_GENERATED_LABEL, PRD_CORRELATION_PROPERTY
-from app.domain.atlassian import ConfluencePage, InlineComment
+from app.domain.atlassian import (
+    ConfluenceAttachment,
+    ConfluencePage,
+    ConfluencePageRef,
+    InlineComment,
+)
 from app.domain.errors import AgentError
 
 V2 = "/wiki/api/v2"
@@ -173,6 +178,128 @@ class ConfluenceAdapter:
             if item.get("key") == key:
                 return str(item.get("value"))
         return None
+
+    async def list_descendant_pages(
+        self, folder_id: str, *, exclude_folder_ids: set[str] | None = None
+    ) -> tuple[ConfluencePageRef, ...]:
+        """Every page under a folder, recursively — the Agent B KB crawl (AD-14, Epic 7).
+
+        Walks a folder's direct children (pages and sub-folders) and each page's own child pages,
+        following v2 cursor pagination. Sub-folders whose id is in ``exclude_folder_ids`` are not
+        descended into — that is how the draft/review folder stays out of the KB. Returns lightweight
+        refs; the caller fetches bodies with :meth:`get_page` only for pages it keeps.
+
+        Additive read verb: Agent A does not call it, and it changes no existing behaviour.
+        """
+        exclude = exclude_folder_ids or set()
+        collected: list[ConfluencePageRef] = []
+        seen: set[str] = set()
+        stack: list[tuple[str, str]] = [(folder_id, "folder")]
+        while stack:
+            container_id, container_type = stack.pop()
+            for child in await self._list_direct_children(container_id, container_type):
+                child_id = child["id"]
+                child_type = child["type"]
+                if child_type == "folder":
+                    if child_id not in exclude:
+                        stack.append((child_id, "folder"))
+                elif child_type == "page" and child_id not in seen:
+                    seen.add(child_id)
+                    collected.append(
+                        ConfluencePageRef(
+                            id=child_id,
+                            title=child["title"],
+                            parent_id=container_id,
+                            parent_type=container_type,
+                        )
+                    )
+                    stack.append((child_id, "page"))  # a page may itself have child pages
+        return tuple(collected)
+
+    async def list_attachments(self, page_id: str) -> tuple[ConfluenceAttachment, ...]:
+        """Every attachment on a page (v2, cursor-paginated) — the Agent B image pull (Epic 7, S-B10).
+
+        Additive read verb: Agent A does not call it. `_links.download` is the API-relative path to the
+        binary, handed to :meth:`download_attachment`.
+        """
+        path: str | None = f"{V2}/pages/{page_id}/attachments"
+        params: dict[str, Any] | None = {"limit": 250}
+        out: list[ConfluenceAttachment] = []
+        while path:
+            body = (
+                await self._client.request(
+                    "GET",
+                    path,
+                    operation="list_attachments",
+                    params=params,
+                    context={"page": page_id},
+                )
+                or {}
+            )
+            for item in body.get("results") or []:
+                download = str(((item.get("_links") or {}).get("download")) or "")
+                if not download:
+                    continue
+                out.append(
+                    ConfluenceAttachment(
+                        id=str(item.get("id") or ""),
+                        filename=str(item.get("title") or ""),
+                        media_type=str(item.get("mediaType") or ""),
+                        download_path=download,
+                    )
+                )
+            path = str((body.get("_links") or {}).get("next") or "") or None
+            params = None
+        return tuple(out)
+
+    async def download_attachment(self, download_path: str) -> bytes:
+        """Fetch one attachment's binary. `download_path` is the v2 `_links.download` (API-relative).
+
+        Confluence's download links are rooted at `/wiki/...`; the API client's base_url is the site
+        root, so a `/wiki`-prefixed path is used as-is and any other is prefixed with `/wiki`.
+        """
+        path = download_path if download_path.startswith("/wiki") else f"/wiki{download_path}"
+        return await self._client.download(path, operation="download_attachment")
+
+    async def _list_direct_children(
+        self, container_id: str, container_type: str
+    ) -> list[dict[str, str]]:
+        """One container's immediate children, following cursor pagination, normalized to id/title/type.
+
+        Folders expose mixed children at ``/folders/{id}/direct-children`` (each item carries a
+        ``type``); a page's child pages come from ``/pages/{id}/children`` (all pages). Both are v2.
+        """
+        if container_type == "folder":
+            path = f"{V2}/folders/{container_id}/direct-children"
+        else:
+            path = f"{V2}/pages/{container_id}/children"
+        params: dict[str, Any] | None = {"limit": 250}
+        out: list[dict[str, str]] = []
+        while path:
+            body = (
+                await self._client.request(
+                    "GET",
+                    path,
+                    operation="list_direct_children",
+                    params=params,
+                    context={"container": container_id},
+                )
+                or {}
+            )
+            for item in body.get("results") or []:
+                item_id = str(item.get("id") or "")
+                if not item_id:
+                    continue
+                out.append(
+                    {
+                        "id": item_id,
+                        "title": str(item.get("title") or ""),
+                        "type": str(item.get("type") or "page"),
+                    }
+                )
+            path = str((body.get("_links") or {}).get("next") or "")
+            params = None  # the cursor is carried in the next link's query string
+        return out
 
     # -- writes ------------------------------------------------------------------------------
 

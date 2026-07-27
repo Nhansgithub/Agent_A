@@ -40,13 +40,21 @@ dev = [
     "import-linter>=2,<3",             # enforces AD-1 inward-only dependencies
     "ruff>=0.6,<1",
 ]
+# Epic 7 — Agent B's own runtime deps, kept OUT of Agent A's `dependencies` so the Agent A box stays
+# inside its 1 GB envelope (AD-21): Agent B is a separate concern and may deploy separately. Justified
+# in DECISION-LOG D-43 (embeddings) / D-49 (numpy store, not sqlite-vec).
+agent_b = [
+    "fastembed>=0.8,<1",               # local ONNX embeddings for the RAG index (D-43); no torch
+    "numpy>=2,<3",                     # brute-force cosine over the vector store (D-49)
+    "slack-bolt>=1.18,<2",             # Slack Socket Mode Q&A surface (S-B7); live-gated (B-9)
+]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["app*"]
+include = ["app*", "agent_b*"]
 
 # ---------------------------------------------------------------------------
 # AD-1 — Layered boundaries with inward-only dependency.
@@ -55,7 +63,9 @@ include = ["app*"]
 # socket; only the repository runs SQL. Violations fail CI, not code review.
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_package = "app"
+# Epic 7 — Agent B is a second root package with its own enforced boundaries (AD-27). Agent A's
+# `app` boundaries are unchanged; the contracts below add the mirrored rules for `agent_b`.
+root_packages = ["app", "agent_b"]
 # Required so the "forbidden" contracts below can name third-party modules (httpx, sqlite3,
 # anthropic). Without it import-linter errors out rather than checking them.
 include_external_packages = true
@@ -128,6 +138,41 @@ name = "AD-4: config is a leaf — it depends on no other app layer"
 type = "forbidden"
 source_modules = ["app.config"]
 forbidden_modules = [
+    "app.main",
+    "app.webhooks",
+    "app.router",
+    "app.orchestrator",
+    "app.agents",
+    "app.adapters",
+    "app.repository",
+    "app.admin",
+]
+
+# ---------------------------------------------------------------------------
+# Epic 7 — Agent B mirrors AD-1 / AD-2 / AD-6 with its own contracts (AD-27, AD-32).
+# Source lists grow as `agent_b` gains layers (pipeline, agents, adapters, rag, slack).
+# ---------------------------------------------------------------------------
+[[tool.importlinter.contracts]]
+name = "AD-32: only agent_b.repository may run SQL"
+type = "forbidden"
+allow_indirect_imports = "true"
+source_modules = [
+    "agent_b.config",
+    "agent_b.pipeline",
+    "agent_b.agents",
+    "agent_b.rag",
+    "agent_b.qa",
+    "agent_b.slack",
+    "agent_b.eval",
+]
+forbidden_modules = ["sqlite3"]
+
+[[tool.importlinter.contracts]]
+name = "AD-27: agent_b.config is a leaf — it depends on no other layer"
+type = "forbidden"
+source_modules = ["agent_b.config"]
+forbidden_modules = [
+    "agent_b.repository",
     "app.main",
     "app.webhooks",
     "app.router",

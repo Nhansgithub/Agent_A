@@ -39,8 +39,8 @@ is a help document, so favour clarity and brevity over completeness-for-its-own-
 
 ### The supported Markdown subset
 
-The draft is converted to a Confluence page and later exported back as a `.md` file, so it must stay
-inside the subset that survives that round trip:
+The draft is converted to a Confluence page (and later mirrored into the internal knowledge base as
+Markdown), so it must stay inside the subset that survives that round trip:
 
 - `#`…`######` headings
 - paragraphs

@@ -115,16 +115,12 @@ class PublishingHandlers:
 
         result = await context.publisher.publish(
             tenant=context.tenant,
-            prd_id=context.prd_id,
             page_id=state.userdoc_page_id or "",
-            page_title=state.prd_title or "UserDoc",
             agent_account_id=await context.agent_account_id(),
             space_admin_account_ids=await context.space_admin_account_ids(),
             on_step=context.record_publish_progress,
             restriction_done=state.restriction_applied_at is not None,
             move_done=state.moved_to_published_at is not None,
-            export_done=state.md_exported_at is not None,
-            existing_md_path=state.md_export_path,
         )
 
         # The doc is published but NOT write-protected (FR-15 step 1 opted out). Say so on the
@@ -136,7 +132,7 @@ class PublishingHandlers:
                 adf.doc(
                     adf.paragraph(
                         adf.mention(context.tenant.head_of_product_account_id),
-                        adf.text(" the UserDoc is published, moved, and exported — but it is "),
+                        adf.text(" the UserDoc is published and moved — but it is "),
                         adf.strong("not edit-restricted"),
                         adf.text(
                             ". This site's Confluence plan does not support page restrictions, so "
@@ -148,11 +144,7 @@ class PublishingHandlers:
             )
 
         # (4) Mark complete — the orchestrator's stage advance, in the same write (AD-11).
-        note = f"published; exported to {result.md_export_path}"
+        note = "published and moved to the published folder"
         if result.restriction_skipped:
             note += " (edit restriction skipped — tenant opted out)"
-        return Advance(
-            to_stage=Stage.COMPLETE,
-            recorded={"md_export_path": result.md_export_path},
-            note=note,
-        )
+        return Advance(to_stage=Stage.COMPLETE, note=note)

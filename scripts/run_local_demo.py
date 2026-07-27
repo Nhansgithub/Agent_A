@@ -120,8 +120,6 @@ def _print_state(state, base_url: str) -> None:
         print(f"  Review ticket         {base_url}/browse/{state.review_ticket_key}")
     if state.publishing_ticket_key:
         print(f"  Publishing ticket     {base_url}/browse/{state.publishing_ticket_key}")
-    if state.md_export_path:
-        print(f"  exported .md          {state.md_export_path}")
 
 
 async def create_and_start() -> None:

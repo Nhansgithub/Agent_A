@@ -1,8 +1,8 @@
 """Tenant-config and system-config schemas (AD-4, PRD §11).
 
 The config registry is the **only** home for project-specific literals — Jira project keys, Confluence
-folder ids, PM / Head-of-Product / admin account ids, credential refs, `md_export_dir`. Onboarding a
-project or swapping a reviewer is an edit here and nowhere else (NFR-02, NFR-05).
+folder ids, PM / Head-of-Product / admin account ids, credential refs. Onboarding a project or swapping
+a reviewer is an edit here and nowhere else (NFR-02, NFR-05).
 
 Validation here is not ceremony. Two of the rules below prevent genuine production incidents:
 
@@ -75,8 +75,10 @@ class TenantConfig(BaseModel):
     the agent escalates to the admin rather than guessing a path."""
 
     # --- infra ----------------------------------------------------------------------------------
-    md_export_dir: str = NonEmptyStr
-    """FR-15 step 3: where the final UserDoc `.md` is written on server disk."""
+    md_export_dir: str | None = None
+    """**Deprecated (D-44, S-B8):** the FR-15 step-3 `.md` export is retired — Agent B captures the
+    published UserDoc via its pull, so a server-disk copy is redundant. Accepted-but-ignored so an
+    existing registry still validates; no code reads it. Safe to delete from a tenant's config."""
 
     require_edit_restriction: bool = True
     """FR-15 step 1 / AD-18: apply the Confluence edit restriction when publishing.

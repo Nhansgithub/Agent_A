@@ -114,3 +114,38 @@ class ConfluencePage:
     @property
     def is_trashed(self) -> bool:
         return self.status == "trashed"
+
+
+@dataclass(frozen=True, slots=True)
+class ConfluencePageRef:
+    """A lightweight reference to a page found while crawling a folder tree (Epic 7, AD-14).
+
+    Just enough to decide whether to keep the page and how it sits in the tree; the body is fetched
+    separately with a `get_page` call only for pages the crawl keeps, so listing a large space does not
+    pull every body up front. `parent_id` is the immediate container — a folder id or a parent-page id,
+    disambiguated by `parent_type` — which is what the Agent B deterministic linker (S-B2) turns into
+    hierarchy edges.
+    """
+
+    id: str
+    title: str
+    parent_id: str
+    parent_type: str  # "folder" | "page"
+
+
+@dataclass(frozen=True, slots=True)
+class ConfluenceAttachment:
+    """An attachment on a Confluence page — the source for Agent B's image assets (Epic 7, S-B10).
+
+    `download_path` is the API-relative path to the binary (Confluence's `_links.download`), fetched
+    with the transport's binary read. `media_type` is the MIME type, used to keep only images.
+    """
+
+    id: str
+    filename: str
+    media_type: str
+    download_path: str
+
+    @property
+    def is_image(self) -> bool:
+        return self.media_type.lower().startswith("image/")

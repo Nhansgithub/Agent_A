@@ -38,3 +38,22 @@ poetroastery.com {
 		output stderr
 	}
 }
+
+# Agent B's internal Knowledge Base — the Quartz static site (S-B5). A SUBDOMAIN, so it never collides
+# with the apex webhook vhost above. Add an A record for `agent.poetroastery.com` → this Droplet (B-4);
+# Caddy then gets its own Let's Encrypt cert for the name automatically.
+#
+# Read-only and UNAUTHENTICATED by the owner's call (D-45): it serves pre-built static files only, with
+# no proxy to the app and no admin surface — nothing here can mutate state. The site is built OFF-box
+# (deploy/build_site.sh) and its output dir (AgentBConfig.publish.output_dir, default data/site) is
+# rsynced/mounted to the path below. `file_server` with `try_files` gives Quartz's clean URLs.
+agent.poetroastery.com {
+	encode gzip
+	root * /opt/agent/data/site
+	try_files {path} {path}/ {path}.html
+	file_server
+
+	log {
+		output stderr
+	}
+}

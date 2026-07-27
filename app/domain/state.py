@@ -65,6 +65,8 @@ class PrdState:
     token cost as the guardrail on the uncapped redraft loop. Never a hard cap."""
 
     md_export_path: str | None = None
+    """**Deprecated (D-44/S-B8):** the `.md` export is retired; this stays nullable and is never
+    written (Agent B captures the published UserDoc via its pull). Kept so the DB needs no rebuild."""
 
     pending_feedback: str | None = None
     """FR-10/FR-11 — the confirmed structured feedback awaiting application in the `revising` stage.
@@ -85,11 +87,12 @@ class PrdState:
     for an ordinary Jira-comment thread, in which case the loop addresses the configured PM as before."""
 
     # --- AD-18 publish sub-checkpoints ---------------------------------------------------------
-    # The publish transaction's four side-effects are individually guarded so resuming the
-    # `publishing` stage skips what already succeeded and never re-applies it.
+    # The publish transaction's side-effects are individually guarded so resuming the `publishing`
+    # stage skips what already succeeded and never re-applies it.
     restriction_applied_at: datetime | None = None
     moved_to_published_at: datetime | None = None
     md_exported_at: datetime | None = None
+    """**Deprecated (D-44/S-B8):** export retired; nullable, never written. Kept — no DB rebuild."""
 
     # --- error / observability ------------------------------------------------------------------
     correlation_id: str = field(default_factory=new_correlation_id)

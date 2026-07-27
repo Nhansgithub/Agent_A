@@ -152,3 +152,50 @@ Product Done). Watch LangSmith for per-step latency/cost. That is the PRD §12 D
 Resizing the Droplet up (to 2 GB) is a few-minute, reversible operation in the DO panel (§15.3).
 Treat an OOM during the §12 run as the signal to resize, not to redesign — nothing hard-codes a
 1-GB-only assumption.
+
+---
+
+## Agent B (Epic 7) — the KB + Slack Q&A bot
+
+Agent B ships as its **own** image (`deploy/Dockerfile.agent_b`) so Agent A's image stays lean — Agent
+B carries the `agent_b` extra (fastembed → onnxruntime + numpy + slack-bolt) which Agent A must not.
+It runs as a **separate container** (`agent-b`) plus a nightly pull cron; Agent A is untouched.
+
+**Prerequisites on the box:** the same `/opt/agent/.env` (now also holding the three `AGENTB_SLACK_*`
+keys) and `/opt/agent/config/registry.yaml` — make sure its `agent_b:` block matches your local
+`config/registry.yaml` (the folder ids, `allowed_channel_ids`, and **no** `embeddings.store` key).
+
+### 1. Build the Agent B image OFF the box and push (AD-21)
+
+```bash
+docker build -f deploy/Dockerfile.agent_b -t ghcr.io/nhansgithub/agent_b_bot:latest .
+docker push ghcr.io/nhansgithub/agent_b_bot:latest
+```
+
+(Or add a CI job mirroring the Agent A `build` job. Building on the 1 GB box can OOM — don't.)
+
+### 2. Deploy the bot + nightly pull
+
+```bash
+./deploy/agent_b.sh          # pulls the image, seeds the vault+index, starts `agent-b`, installs cron
+```
+
+The bot is **Socket Mode** — it connects out to Slack, so there is **no Caddy route and no firewall
+change** for it. Test by DM-ing the bot or @-mentioning it in the allowed channel (`C0BL3KQSK1S`).
+Memory: `agent-b` is capped at 512m and shares the box with Agent A (768m) + Caddy; the 2 GB swap
+cushions the overlap. If it thrashes, resize to 2 GB (see above) or give Agent B its own host.
+
+### 3. (Optional) The public KB site — S-B5
+
+Build the Quartz site off-box and serve the output at `agent.poetroastery.com` (read-only, no auth):
+
+```bash
+QUARTZ_REF=v4.5.1 ./deploy/build_site.sh        # clones Quartz, stages the vault, `npx quartz build`
+# rsync the built site to the box's /opt/agent/data/site, add an `agent.poetroastery.com` A record,
+# then reload Caddy — the vhost is already in deploy/Caddyfile.
+```
+
+### 4. (Optional) The Q&A eval gate — S-B9
+
+Fill `fixtures/agent_b/golden.json` with real page ids (README there) and run
+`scripts/run_agent_b_eval.py` (API-gated) to bank the answer-quality bar.

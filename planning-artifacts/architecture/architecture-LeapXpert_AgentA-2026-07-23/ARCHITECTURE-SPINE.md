@@ -406,6 +406,43 @@ Source tree (cold-start scaffold; the code owns the detail):
 | Classifier eval: held-out fixtures, ×3, confusion matrix | Classifier, `fixtures/classifier/` | AD-17 |
 | Feedback routing via typed FeedbackDecision | Feedback interpreter, orchestrator, `domain/` | AD-16 |
 
+## Agent B — Architectural Decisions (Epic 7)
+
+Agent B (internal Knowledge Base + Slack Q&A) is a monorepo sibling of Agent A. These decisions bind it;
+Agent A's AD-1…AD-26 are unchanged. The "why" lives in the decision log (D-41…D-46).
+
+### AD-27 — Agent B is a monorepo sibling with its own enforced boundaries [ADOPTED]
+`agent_b/` reuses Agent A's adapters / LLM / config / tracing by injection but is layered independently:
+import-linter runs over `root_packages = ["app", "agent_b"]`, and `agent_b` mirrors AD-1 / AD-2 / AD-6 —
+only adapters open an HTTP socket; only `agent_b.repository` runs SQL; only `agent_b.agents` import the
+Anthropic SDK; `agent_b.config` is a leaf. Agent A's boundaries are untouched.
+
+### AD-28 — The vault is a read-only projection of Confluence [ADOPTED]
+Confluence remains the source of record. The Obsidian vault is a derived, regenerated Markdown projection;
+humans never edit it (edits are overwritten on the next scheduled pull). This is what makes the pull
+safely idempotent and keeps the KB non-authoritative — it adds graph + navigation, it does not own
+content.
+
+### AD-29 — Organization is metadata, never physical file moves [ADOPTED]
+"Clean organization" is delivered as MOC hub notes + a tag taxonomy + frontmatter over a stable, id-based
+file layout. No LLM-driven folder reshuffling — that would churn the git vault, break `[[links]]`, and
+destabilize the graph.
+
+### AD-30 — Tiered linking; LLM link suggestions are quarantined [ADOPTED]
+Deterministic edges (hierarchy, restored references) are inlined as `[[wikilinks]]`. LLM-inferred
+relationships are written only to a `related_suggested:` block, never inlined into prose, so a false edge
+can never masquerade as an authoritative one. Q&A cites sources and refuses below a similarity floor.
+
+### AD-31 — Local, no-egress embeddings within the 1 GB envelope [ADOPTED]
+RAG uses local ONNX embeddings (`fastembed`, `bge-small`) into a `sqlite-vec` store — no document text
+leaves the box for a third-party embeddings API. The heavy pull/embed is a short-lived scheduled job;
+only the query path stays resident (AD-21).
+
+### AD-32 — Agent B has its own SQLite store [ADOPTED]
+Agent B's bookkeeping (documents + hashes, the link graph, the LLM-decision cache, the Q&A log, pull-run
+rows) lives in a **separate** SQLite database from Agent A's `state.db`. The AD-2 boundary holds within
+`agent_b`: only `agent_b.repository` runs SQL against it.
+
 ## Deferred
 
 Intentionally pushed down — each can wait, and none lets two units diverge inside the demo scope. **Scope note (r2):** the demo-trim proposed for AD-9 (multi-shape dedupe), AD-12 (cross-org identity fallback), and AD-13 (multi-hop transition handling) was **rejected** — all three ship fully specced and in build scope (full hardening). What remains deferred:

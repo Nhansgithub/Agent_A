@@ -31,6 +31,10 @@ Work top to bottom. Each part tells you exactly which value it produces.
 - [ ] **Part 7** — Register the webhooks *(after the server is reachable — Epic 6)*
 - [ ] **Part 8** — DigitalOcean Droplet + Spaces *(deployment — Epic 6)*
 
+**Agent B (Epic 7) — the knowledge base + Slack Q&A:**
+- [ ] **Part 9** — Slack app for the Agent B Q&A bot *(gives 3 tokens + a channel id)*
+- [ ] **Part 10** — Confluence "designs" folder id *(gives 1 folder id)*
+
 ---
 
 ## Part 1 — Create an Atlassian API token
@@ -458,6 +462,135 @@ LITESTREAM_SECRET_ACCESS_KEY=...
 
 ---
 
+## Part 9 — Slack app for the Agent B Q&A bot *(Epic 7)*
+
+> This is for **Agent B** — the knowledge-base assistant your team chats with in Slack. It is separate
+> from Agent A. You are creating a Slack "app", which appears in your workspace as a **bot user** people
+> can DM or @-mention. No coding — you click through Slack's admin screens and copy **three secrets + one
+> channel id** back to me.
+>
+> **You need permission to install an app** in your workspace. If you are not a Workspace Admin, the
+> install step (9e) may say *"needs approval"* — click to request it, ping your admin, and continue once
+> approved.
+
+We use **Socket Mode**: the bot connects *out* to Slack over a websocket. The big win for you — **no
+public URL, no webhook, nothing to host** for Slack. It works even while the bot runs on the Droplet
+behind a firewall. You will collect three values as you go; there is a copy-paste summary at the end
+(9h).
+
+### 9a. Create the app
+
+1. Go to **https://api.slack.com/apps** and sign in. Check the **workspace name** shown top-right is the
+   right one.
+2. Click **Create New App** → **From scratch**.
+3. **App Name:** `Agent B` (this is the name your team will see). Pick the workspace. Click **Create App**.
+
+You land on the app's **Basic Information** page. Leave this tab open — you'll return in 9f.
+
+### 9b. Turn on Socket Mode → get the **app token**
+
+1. Left sidebar → **Socket Mode**.
+2. Toggle **Enable Socket Mode** on.
+3. It prompts you to create an **app-level token**. Name it `agentb-socket`, confirm the scope
+   **`connections:write`** is listed, and click **Generate**.
+4. **Copy the token now** — it starts with **`xapp-`**. ⚠️ It is shown once.
+
+**→ This is `AGENTB_SLACK_APP_TOKEN`.**
+
+### 9c. Add the bot's permissions (scopes)
+
+1. Left sidebar → **OAuth & Permissions**.
+2. Scroll to **Scopes → Bot Token Scopes → Add an OAuth Scope**, and add each of these (type the name,
+   click it):
+   - `app_mentions:read` — see when someone @-mentions the bot
+   - `chat:write` — post answers
+   - `im:history` — read messages in a DM with the bot
+   - `im:read` — see DM channels
+   - `im:write` — open a DM back to a user
+   - `reactions:read` — see 👍/👎 reactions (answer feedback)
+
+### 9d. Subscribe to the events the bot reacts to
+
+1. Left sidebar → **Event Subscriptions**.
+2. Toggle **Enable Events** on. With Socket Mode enabled there is **no Request URL to fill in** — Slack
+   hides that box. (If it still asks for a URL, go back to 9b: Socket Mode must be on first.)
+3. Expand **Subscribe to bot events → Add Bot User Event**, and add:
+   - `app_mention` — someone @-mentions the bot in a channel
+   - `message.im` — someone sends the bot a direct message
+4. Click **Save Changes** if prompted.
+
+### 9e. Install the app → get the **bot token**
+
+1. Left sidebar → **Install App** → **Install to Workspace** → review → **Allow**.
+   - If it says the install **needs admin approval**, request it and ask your Workspace Admin; come back
+     when approved.
+2. Back on **OAuth & Permissions**, copy the **Bot User OAuth Token** — it starts with **`xoxb-`**.
+
+**→ This is `AGENTB_SLACK_BOT_TOKEN`.**
+
+### 9f. Grab the **signing secret**
+
+1. Left sidebar → **Basic Information → App Credentials**.
+2. Find **Signing Secret**, click **Show**, copy it.
+
+**→ This is `AGENTB_SLACK_SIGNING_SECRET`.**
+
+### 9g. Pick a channel for the bot, and get its id
+
+For the demo, make one channel where the team asks questions (e.g. `#agent-b`).
+
+1. Create the channel in Slack if it doesn't exist.
+2. **Invite the bot:** in that channel, type `/invite @Agent B`. (A bot must be a channel member to see
+   @-mentions there.)
+3. **Get the channel id:** click the channel name at the top → **About** tab → scroll to the bottom →
+   the **Channel ID** looks like `C0123ABCD`. Copy it. *(Or open the channel in a browser and take the
+   id from the end of the URL.)*
+
+*(DMs need none of this — anyone can DM the bot once it's installed. The channel id is only for
+@-mentions in a shared channel.)*
+
+### 9h. What to send back to me
+
+Three secrets + one id:
+
+```
+AGENTB_SLACK_BOT_TOKEN=xoxb-...        (from 9e)
+AGENTB_SLACK_APP_TOKEN=xapp-...        (from 9b)
+AGENTB_SLACK_SIGNING_SECRET=...        (from 9f)
+Agent B channel id:  C0123ABCD          (from 9g)
+```
+
+I put the three tokens into `.env` (secrets, gitignored) and the channel id into `config/registry.yaml`
+at `agent_b.slack.allowed_channel_ids` (not a secret). You don't have to edit any file yourself — just
+paste me the four values.
+
+> ⚠️ **Treat the tokens like passwords.** The `xoxb-` / `xapp-` tokens and the signing secret each let
+> software act as this bot. If one leaks, rotate it in the Slack app admin (see the leak table below).
+
+---
+
+## Part 10 — Confluence "designs" folder id *(Epic 7)*
+
+Agent B builds the knowledge base from three Confluence folders: the **PRD source** folder and the
+**published UserDocs** folder (both already in your config from Part 2), plus a new **designs** folder
+for the PM designs.
+
+1. In the **PM** space, create a folder for designs **next to** (a sibling of) the existing folders —
+   e.g. `designs/` alongside `final_PRD/` and `userdoc-published/`. It can be empty for now; Agent B
+   pulls whatever is in it whenever it runs.
+2. Click into that folder and read its id from the URL, exactly like Part 2c:
+   ```
+   https://yourcompany.atlassian.net/wiki/spaces/PM/folder/1234567890
+                                                            ^^^^^^^^^^ this is the folder id
+   ```
+3. **Send me that folder id.** I add it to `agent_b.include_folder_ids` in `config/registry.yaml`.
+
+No token, no third-party account — designs are just text pages in a folder Agent B reads. (Unlike
+Agent A's published/source folders, this one has **no** "must be a sibling, not nested" restriction —
+Agent B only reads, it never writes back, so it cannot create an ingestion loop.)
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -483,6 +616,9 @@ Worth knowing, so you treat them appropriately.
 | `ANTHROPIC_API_KEY` | Spends your Claude credit | Revoke in the Anthropic console |
 | `WEBHOOK_SHARED_SECRET` | Lets someone trigger agent actions in your Atlassian | Generate a new one; update `.env` *and* both webhook configs |
 | `LANGSMITH_API_KEY` | Read/write your traces | Revoke in LangSmith settings |
+| `AGENTB_SLACK_BOT_TOKEN` | Post/read messages as the Agent B bot in your workspace | Reinstall the app or rotate the token in the Slack app admin |
+| `AGENTB_SLACK_APP_TOKEN` | Open a Socket Mode connection for the app | Revoke in Slack app → Basic Information → App-Level Tokens |
+| `AGENTB_SLACK_SIGNING_SECRET` | Forge requests that look like they came from Slack | Roll it in Slack app → Basic Information |
 | Spaces keys | Read/write the state backup | Regenerate in the DigitalOcean panel |
 
 `.env` is gitignored, so these do not enter git history — provided you keep them in `.env` and never

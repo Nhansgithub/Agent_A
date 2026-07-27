@@ -3,7 +3,7 @@
 > **PRD-to-UserDoc Automation Agent Flow.** A multi-tenant Python service: a Confluence webhook
 > detects a finalized PRD → a LangGraph-orchestrated pipeline of role-agents drafts an end-user help
 > doc → drives a human review loop in Jira → waits for two human approvals (Reviewer PM PASS, then
-> Head of Product) → restricts + moves + exports the doc as Markdown.
+> Head of Product) → restricts + moves the approved doc (Agent B later mirrors it into the KB).
 > **Jira and Confluence are the entire human interface. There is no GUI.**
 
 This file is the **map, not the territory**. It exists so you can find the right file, understand the
@@ -62,18 +62,25 @@ receives its collaborators by injection.
 | **Tenant routing** | [app/router.py](app/router.py) | Resolve one tenant from the event via the config registry (AD-3). |
 | **Orchestrator** | [app/orchestrator/](app/orchestrator/) | `runner.py` (the only writer of `stage`; the 5-step invocation + all webhook re-entry methods), `graph.py` (in-invocation LangGraph router), `stages.py` (`Advance`/`Park`/`Stay` outcomes + `HandlerRegistry`), `feedback_routing.py` (pure, LLM-free routing of a `FeedbackDecision`), `context.py` (the per-run `RunContext` — what feeds the agents), `handlers_{detection,authoring,review,publishing}.py` (one stage → one unit of work). |
 | **Agents (LLM)** | [app/agents/classifier/](app/agents/classifier/), [author/](app/agents/author/), [feedback_interpreter/](app/agents/feedback_interpreter/) | Each = `agent.py` + **`SKILL.md`** (the persona/rubric — the primary tuning surface; edit this to change behavior). Classifier also has `evaluation.py` (the 0-FP/0-FN harness). |
-| **Agents (mechanical, no LLM)** | [app/agents/](app/agents/) | `detection.py` (admission rule), `ticket_manager.py` (all Jira create/find/transition), `publisher.py` (create/restrict/move/export), `error_handler.py`, `identity.py` (Confluence→Jira assignee), `review_request.py` (comment builders). |
+| **Agents (mechanical, no LLM)** | [app/agents/](app/agents/) | `detection.py` (admission rule), `ticket_manager.py` (all Jira create/find/transition), `publisher.py` (create/restrict/move; `.md` export retired — D-44), `error_handler.py`, `identity.py` (Confluence→Jira assignee), `review_request.py` (comment builders). |
 | **Shared LLM runtime** | [app/agents/llm.py](app/agents/llm.py), [tracing.py](app/agents/tracing.py), [skills.py](app/agents/skills.py) | The **only** module that imports the Anthropic SDK; every call is traced (AD-20). `load_skill(role)` reads a `SKILL.md` at call time. |
-| **Adapters** | [app/adapters/](app/adapters/) | `jira.py`, `confluence.py`, `markdown.py`, `http.py`. Domain verbs (`transition_issue`), not HTTP. ADF bodies + retry + `AgentError` normalization live here. |
+| **Adapters** | [app/adapters/](app/adapters/) | `jira.py`, `confluence.py`, `markdown.py`, `http.py`. Domain verbs (`transition_issue`), not HTTP. ADF bodies + retry + `AgentError` normalization live here. `http.py` has a JSON `request` and a binary `download` (bytes, for Agent B image assets, S-B10); `confluence.py` adds `list_attachments`/`download_attachment` (additive; Agent A calls neither). |
 | **Repository** | [app/repository/](app/repository/) | `state_repository.py` (the single durable truth + the only `stage`-mutator API), `event_repository.py` (`processed_events` dedupe), `database.py`. |
 | **Config** | [app/config/](app/config/) | `schema.py` (`TenantConfig`), `registry.py`, `secrets.py`, `constants.py` (the one allowed cross-tenant literal: the `agent-generated` label). Live values in `config/registry.yaml` (**gitignored**). |
 | **Domain** | [app/domain/](app/domain/) | `stage.py` (the §9 `Stage` enum + legal-transition map), `state.py` (`PrdState`), `feedback.py` (`FeedbackDecision`), `events.py`, `dedupe.py`, `errors.py` (`AgentError`), `adf.py`. Pure types, no I/O. |
 | **Composition root** | [app/composition.py](app/composition.py) | The one place that *constructs* things: reads config, builds adapters + the LLM client, wires the 6 agents, registers handlers, produces the `Orchestrator`. Start here to trace how anything is assembled. |
 | **Admin / ops** | [app/admin/](app/admin/) | Authenticated localhost reconcile + liveness endpoint (AD-22). |
-| **Fixtures** | [fixtures/classifier/{dev,holdout}/](fixtures/classifier/) | Labeled ACCEPT/REJECT pages; `holdout` is the 0-FP/0-FN acceptance bar (AD-17). |
-| **Scripts** | [scripts/](scripts/) | `discover_ids.py`, `verify_setup.py` (read-only config check), `run_classifier_eval.py`, `run_local_demo.py`. |
-| **Deploy** | [deploy/](deploy/) | Dockerfile, Caddyfile, swap/firewall, litestream, cron reconcile. |
+| **Fixtures** | [fixtures/classifier/{dev,holdout}/](fixtures/classifier/), [fixtures/agent_b/](fixtures/agent_b/) | Classifier: labeled ACCEPT/REJECT pages; `holdout` is the 0-FP/0-FN bar (AD-17). Agent B: `golden.example.json` Q&A golden-set template (S-B9). |
+| **Scripts** | [scripts/](scripts/) | Agent A: `discover_ids.py`, `verify_setup.py`, `run_classifier_eval.py`, `run_local_demo.py`. Agent B: `run_agent_b_pull.py` (nightly pull+index), `build_agent_b_site.py` (Quartz stage), `run_agent_b_slack.py` (bot), `run_agent_b_eval.py` (Q&A gate). |
+| **Deploy** | [deploy/](deploy/) | Dockerfile, Caddyfile (+ Agent B KB vhost), swap/firewall, litestream, `reconcile.cron`, `agent_b_pull.cron`, `build_site.sh`. |
 | **Tests** | [tests/](tests/) | Every story has tests; external services faked at the adapter boundary — **no network in the unit suite**. |
+| **Agent B — package (Epic 7)** | [agent_b/](agent_b/) | The internal KB + Slack Q&A sibling: projects a curated Confluence space into an Obsidian vault, publishes it (Quartz), and answers over it in Slack. Reuses `app` adapters/LLM/config by injection (AD-27). **Code-complete** (S-B0…S-B10); live activation gated on B-4 (KB URL+DNS) and B-9 (Slack app/tokens). See [BACKLOG.md](implementation-state/BACKLOG.md) → Epic 7. |
+| **Agent B — config** | [agent_b/config/](agent_b/config/) | `AgentBConfig` schema + loader for the `agent_b:` block of `registry.yaml` (AD-4 mirror; a leaf, AD-27). |
+| **Agent B — repository** | [agent_b/repository/](agent_b/repository/) | Agent B's **own** SQLite store — `documents`/`links`/`llm_cache`/`qa_log`/`pull_runs` (AD-32). The only `agent_b` layer that runs SQL. |
+| **Agent B — pipeline** | [agent_b/pipeline/](agent_b/pipeline/) | Vault build: `crawler` → `convert` → `writer` → `linker` (the materializer: hierarchy + restored `[[wikilinks]]` + the curation overlay — tags to frontmatter, suggestions quarantined) → `curate` (drives the Librarian, caches, writes MOC notes). `bootstrap.build_vault` = import + link (the S-B1 baseline). `sync.py` = the **maintained pull** (S-B4): `sync_vault` change-detects + tombstones deletions (+ pulls image assets for changed pages via `assets.py`, S-B10); `run_pull` composes sync → curate → link → `pull_runs` ledger + one git commit (`vcs.GitVault`, injected `VaultVcs`). `assets.py` = image-attachment fetch → `assets/<page_id>/` (idempotent; `render_note` rewrites refs to the local path). Cron: [deploy/agent_b_pull.cron](deploy/agent_b_pull.cron) → [scripts/run_agent_b_pull.py](scripts/run_agent_b_pull.py). `publish.py` = the S-B5 Quartz seam (`render_quartz_config` config-driven baseUrl, `render_custom_css`, `stage_content`); off-box build via [deploy/build_site.sh](deploy/build_site.sh) → [scripts/build_agent_b_site.py](scripts/build_agent_b_site.py); served by the `agent.poetroastery.com` block in [deploy/Caddyfile](deploy/Caddyfile). |
+| **Agent B — agents (LLM)** | [agent_b/agents/](agent_b/agents/) | `librarian/` (curation) and `answerer/` (grounded, citing, refusing RAG answers) — each `agent.py` + `SKILL.md` over the shared `app.agents.llm`, the only `agent_b` layer that reaches the LLM (AD-27). `skills.py` loads a role's `SKILL.md`. |
+| **Agent B — RAG + Q&A** | [agent_b/rag/](agent_b/rag/), [agent_b/qa.py](agent_b/qa.py) | `rag/`: `chunker` → `embedder` (`fastembed`, injectable; fake in tests) → `index_vault` (float32 BLOBs + numpy cosine in the `chunks` table, **not sqlite-vec**, D-49; incremental by `content_hash`) → `retrieve` (vector + graph expansion + `min_score` refusal). `qa.answer_question` = the transport-agnostic core (retrieve→answer→`qa_log`) that Slack (S-B7) and the eval (S-B9) call. No LLM here (answerer owns it) and no SQL (repository owns it). `eval.py` = the S-B9 answer-quality gate (source recall + refusal correctness; bar in `TARGET_*`), a pure harness over an injected `answer_question`. |
+| **Agent B — Slack** | [agent_b/slack/](agent_b/slack/) | `handler.py` = transport-agnostic Q&A (allow-list → `qa.answer_question` → in-thread reply + Sources + 👍/👎 to `qa_log`), fully offline-tested. `app.py` = Socket-Mode bolt wiring, imports `slack_bolt` **lazily** (declared in the `agent_b` extra, not required to import the package). Live entry: [scripts/run_agent_b_slack.py](scripts/run_agent_b_slack.py); gated → B-9. |
 
 ### The request lifecycle in six lines (so you know which handler owns a behavior)
 
@@ -82,7 +89,7 @@ receives its collaborators by injection.
 3. **Detect → confirm** (`handlers_detection.py`): Detection rule admits; **Classifier** (LLM) confirms it's a real PRD; Ticket manager drives the tracking ticket to Done.
 4. **Draft** (`handlers_authoring.py`): **Author** (LLM) drafts + self-critiques → Publisher creates the draft page → Review ticket → **park at `awaiting_review`**.
 5. **Review loop** (`runner.apply_pm_comment` + `handlers_review.py`): **Feedback interpreter** (LLM) classifies the PM comment → `feedback_routing.py` acts → Author revises. Uncapped; each round needs a fresh human comment.
-6. **Publish** (`handlers_publishing.py`): two human "Done" gates (PM PASS, then Head of Product) → Publisher restricts + moves + exports → `complete`.
+6. **Publish** (`handlers_publishing.py`): two human "Done" gates (PM PASS, then Head of Product) → Publisher restricts + moves → `complete` (the `.md` export is retired, D-44 — Agent B mirrors the doc via its pull).
 
 > Agents never call each other. Every hand-off goes through the orchestrator and the state record.
 > The `RunContext` ([orchestrator/context.py](app/orchestrator/context.py)) gathers live Confluence/Jira
@@ -96,7 +103,7 @@ Every change preserves all of these. If a task seems to require breaking one, **
 
 1. **AD-1 — Inward-only dependencies.** Only adapters touch Atlassian; only the repository runs SQL. Agents/orchestrator receive transports by injection.
 2. **AD-2 / AD-11 — One durable store.** The repository-owned SQLite state record is the single authoritative truth. `stage` is written **only by the orchestrator**. LangGraph is in-invocation control flow only (`InMemorySaver`, discarded per webhook).
-3. **AD-4 — Config isolation.** No project literal (Jira key, folder id, account id, `md_export_dir`) in code, prompts, or `SKILL.md`. Tree stays grep-clean. Only `agent-generated` is an allowed constant. Secrets via env refs only.
+3. **AD-4 — Config isolation.** No project literal (Jira key, folder id, account id, KB base URL) in code, prompts, or `SKILL.md`. Tree stays grep-clean. Only `agent-generated` is an allowed constant. Secrets via env refs only.
 4. **AD-15 — The agent never transitions a human-gate ticket.** It *detects* a human moving the Review/Publishing ticket to Done. It auto-transitions only the PRD-tracking ticket. No timeouts; parked runs park indefinitely.
 5. **AD-16 — No loop self-spins.** The clarification (4 enumerated triggers only) and structure-confirmation loops block on a human reply. The redraft loop is uncapped but needs a fresh human comment each round.
 6. **AD-9 — Idempotency.** Dedupe key `<tenant>:<event_type>:<entity>:<version>` in `processed_events` (UNIQUE), recorded at flow admission. Every external create is find-or-create by the `prd_id` marker.
@@ -178,7 +185,10 @@ only — never `langgraph-api`, NFR-10)** · langgraph-checkpoint 4.1.1 (`InMemo
 0.117.0 · langsmith 0.10.9 · markdownify 1.2.3 · httpx · stdlib `sqlite3` · Caddy 2.11.4 · litestream
 ≥0.5.4. **Jira Cloud REST v3** (ADF bodies mandatory) · **Confluence Cloud REST v2** (+ **v1** for move
 & content-restriction). Default to the latest, most capable Claude models for LLM work; model ids come
-from `config/registry.yaml` (`system.models.*`), never a literal at a call site (AD-17).
+from `config/registry.yaml` (`system.models.*`), never a literal at a call site (AD-17). **Agent B**
+adds its own deps in the `agent_b` extra (kept out of Agent A's 1 GB envelope, AD-21): **fastembed**
+(local ONNX embeddings) + **numpy** (the vector store is a numpy cosine over float32 BLOBs, not
+sqlite-vec — D-49) + **slack-bolt** (S-B7). Quartz (Node SSG) builds the KB site off-box, never on the box.
 
 ## 🧭 Conventions
 

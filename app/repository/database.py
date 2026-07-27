@@ -41,13 +41,13 @@ CREATE TABLE IF NOT EXISTS prd_state (
     userdoc_page_id           TEXT,
     prd_title                 TEXT,
     review_round              INTEGER NOT NULL DEFAULT 0,
-    md_export_path            TEXT,
+    md_export_path            TEXT,   -- DEPRECATED (D-44/S-B8): export retired; kept nullable, never written
     pending_feedback          TEXT,
     pending_deletion_page_id  TEXT,
     active_reviewer_account_id TEXT,
     restriction_applied_at    TEXT,
     moved_to_published_at     TEXT,
-    md_exported_at            TEXT,
+    md_exported_at            TEXT,   -- DEPRECATED (D-44/S-B8): export retired; kept nullable, never written
     correlation_id            TEXT NOT NULL,
     last_error                TEXT,
     liveness_alerted_at       TEXT,

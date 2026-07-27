@@ -84,7 +84,8 @@ tenants:
     preferred_transition_path: []
 
     # --- infra ------------------------------------------------------------------------------------
-    md_export_dir: "/data/userdocs/alpha"   # FR-15 step 3 — where the final .md is written
+    # NOTE: `md_export_dir` is deprecated (D-44/S-B8) — the FR-15 step-3 `.md` export is retired
+    # (Agent B captures the published UserDoc via its pull). Omit it; it is accepted-but-ignored.
 
     # FR-15 step 1 / AD-18 — edit-restrict the page when publishing. Defaults to true; leave it out
     # unless you must opt out. Set it to false ONLY on a Confluence Cloud **Free** site, which has no
@@ -103,3 +104,42 @@ tenants:
     # `env:ALPHA_JIRA` resolves ALPHA_JIRA_BASE_URL, ALPHA_JIRA_EMAIL, ALPHA_JIRA_API_TOKEN.
     jira_credentials_ref: "env:ALPHA_JIRA"
     confluence_credentials_ref: "env:ALPHA_CONF"
+
+# ---------------------------------------------------------------------------------------------
+# Agent B — internal Knowledge Base + Slack Q&A (Epic 7). Optional: delete this block on a
+# deployment that runs Agent A only. Reuses a tenant's Confluence credentials for a read-only pull.
+# ---------------------------------------------------------------------------------------------
+agent_b:
+  space_key: "REPLACE_SPACE_KEY"
+  confluence_credentials_ref: "env:ALPHA_CONF"
+  # PRD source + published UserDocs + designs. The draft/review folder goes in exclude, never here.
+  include_folder_ids: ["REPLACE_SOURCE_FOLDER_ID", "REPLACE_PUBLISHED_FOLDER_ID", "REPLACE_DESIGNS_FOLDER_ID"]
+  exclude_folder_ids: ["REPLACE_DRAFT_FOLDER_ID"]
+  folder_types:
+    "REPLACE_SOURCE_FOLDER_ID": "prd"
+    "REPLACE_PUBLISHED_FOLDER_ID": "userdoc"
+    "REPLACE_DESIGNS_FOLDER_ID": "design"
+  vault_dir: "data/vault"
+  database_path: "data/agent_b.db"
+  schedule_cron: "0 3 * * *"
+  curator_model: "claude-sonnet-5"
+  answerer_model: "claude-opus-4-8"
+  embeddings:
+    runtime: "fastembed"
+    model: "BAAI/bge-small-en-v1.5"
+    # Vectors live in Agent B's own SQLite store (data/agent_b.db), not a separate sqlite-vec DB
+    # (D-49): this runtime has no loadable-extension support, and a numpy cosine over a small
+    # internal corpus is fast enough. Tune the chunking here if needed:
+    chunk_chars: 1200
+    chunk_overlap: 150
+  rag:
+    top_k: 8
+    min_score: 0.35
+  publish:
+    base_url: "https://REPLACE_KB_HOST"
+    output_dir: "data/site"
+  slack:
+    bot_token_ref: "env:AGENTB_SLACK_BOT_TOKEN"
+    app_token_ref: "env:AGENTB_SLACK_APP_TOKEN"
+    signing_secret_ref: "env:AGENTB_SLACK_SIGNING_SECRET"
+    allowed_channel_ids: []

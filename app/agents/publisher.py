@@ -8,16 +8,15 @@ Two responsibilities, both idempotent so a resume never double-creates or re-app
   recreated (AD-11 find-or-create by the correlation marker).
 * **`update_draft`** — revise the existing page in place for the FR-11 redraft loop.
 
-The FR-15 publish transaction (restrict/move/export) is added in Epic 5; this module owns only the
-draft-side page lifecycle so far.
+The FR-15 publish transaction is **restrict → move** (Epic 5). The `.md` export that was FR-15 step 3
+is **retired** (D-44, 2026-07-27): Agent B now captures the published UserDoc by pulling the space, so
+a server-disk `.md` copy is redundant. This module owns the page lifecycle; the export is gone.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import Path
 
 from app.adapters.confluence import ConfluenceAdapter
 from app.config.constants import PRD_CORRELATION_PROPERTY
@@ -49,12 +48,10 @@ class DraftRecovery:
 
 @dataclass(frozen=True, slots=True)
 class PublishResult:
-    """The outcome of the FR-15 publish transaction."""
+    """The outcome of the FR-15 publish transaction (restrict → move; export retired, D-44)."""
 
-    md_export_path: str | None
     restriction_applied: bool
     moved: bool
-    exported: bool
     restriction_skipped: bool = False
     """True when the tenant opted out of FR-15 step 1 (`require_edit_restriction: false`). The caller
     surfaces this to the humans — a published page that is still editable must not look identical to
@@ -186,22 +183,18 @@ class Publisher:
         self,
         *,
         tenant: TenantConfig,
-        prd_id: str,
         page_id: str,
-        page_title: str,
         agent_account_id: str,
         space_admin_account_ids: tuple[str, ...] = (),
         on_step: ProgressCallback,
         restriction_done: bool = False,
         move_done: bool = False,
-        export_done: bool = False,
-        existing_md_path: str | None = None,
     ) -> PublishResult:
-        """Run the four ordered publish side-effects, each idempotent and sub-checkpointed (AD-18).
+        """Run the ordered publish side-effects, each idempotent and sub-checkpointed (AD-18).
 
         A resume of the `publishing` stage passes the `*_done` flags from the state record, so a
         side-effect that already completed is skipped and never re-applied. Order is fixed:
-        restrict → move → export → (caller marks complete).
+        restrict → move → (caller marks complete). The FR-15 step-3 `.md` export is retired (D-44).
 
         Args:
             agent_account_id: the AD-10 cached agent account. **Must** be in the restriction allow-list
@@ -227,28 +220,10 @@ class Publisher:
             await self._confluence.move_page(page_id, tenant.confluence_published_folder_id)
             await on_step(moved_to_published_at=utc_now())
 
-        # (3) Export storage → Markdown to server disk for the later SSG step (FR-15 step 3).
-        md_path = existing_md_path
-        if not export_done:
-            page = await self._confluence.get_page(page_id)
-            markdown = self._confluence.storage_to_markdown(page.body_storage)
-            md_path = self._write_export(tenant.md_export_dir, prd_id, page_title, markdown)
-            await on_step(md_exported_at=utc_now(), md_export_path=md_path)
-
+        # FR-15 step 3 (export storage → `.md` on server disk) is retired (D-44): Agent B ingests the
+        # published UserDoc by pulling the space, so a redundant disk copy is no longer written.
         return PublishResult(
-            md_export_path=md_path,
             restriction_applied=not restriction_done and not restriction_skipped,
             moved=not move_done,
-            exported=not export_done,
             restriction_skipped=restriction_skipped,
         )
-
-    @staticmethod
-    def _write_export(md_export_dir: str, prd_id: str, title: str, markdown: str) -> str:
-        """Write the `.md` to the tenant's export dir. Overwrite-safe, so a resume re-export is fine."""
-        directory = Path(md_export_dir)
-        directory.mkdir(parents=True, exist_ok=True)
-        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "userdoc"
-        path = directory / f"{prd_id}-{slug}.md"
-        path.write_text(markdown, encoding="utf-8")
-        return str(path)

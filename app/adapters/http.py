@@ -147,6 +147,47 @@ class AtlassianClient:
         assert last_error is not None
         raise last_error
 
+    async def download(
+        self,
+        path: str,
+        *,
+        operation: str,
+        params: dict[str, Any] | None = None,
+        context: dict[str, str] | None = None,
+    ) -> bytes:
+        """GET a binary body (e.g. a Confluence attachment) — returns raw bytes, not decoded JSON.
+
+        Shares the retry/backoff and `AgentError` normalization of :meth:`request`; the only difference
+        is the success path returns ``response.content``. Used by the Agent B asset pull (S-B10); no
+        Agent A path fetches binaries. Accept header is widened to any content type for this call.
+        """
+        headers = {**self._headers, "Accept": "*/*"}
+        last_error: AgentError | None = None
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                response = await self._client.request("GET", path, params=params, headers=headers)
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                last_error = AgentError(
+                    message=f"Could not reach {self._product.title()} ({type(exc).__name__}).",
+                    suggested_fix=(
+                        f"Check outbound network access and that {self._credentials.base_url} is "
+                        "correct in the tenant's credentials."
+                    ),
+                    operation=f"{self._product}.{operation}",
+                    retryable=True,
+                    context=dict(context or {}),
+                )
+            else:
+                if response.status_code in (200, 201):
+                    return response.content
+                last_error = self._to_agent_error(response, operation, context)
+                if response.status_code not in RETRYABLE_STATUS:
+                    raise last_error
+            if attempt < self._max_attempts:
+                await self._sleep(self._backoff * (2 ** (attempt - 1)))
+        assert last_error is not None
+        raise last_error
+
     @staticmethod
     def _decode(response: httpx.Response) -> Any:
         if response.status_code == 204 or not response.content:

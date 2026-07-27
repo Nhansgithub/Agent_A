@@ -1,4 +1,7 @@
-"""Confluence storage format → Markdown (AD-7, FR-15 step 3, PRD §13 Q5).
+"""Confluence storage format → Markdown (AD-7, PRD §13 Q5).
+
+Originally the FR-15 step-3 `.md` export; that export is retired (D-44), but the converter lives on —
+it is what Agent B's pull uses to turn each Confluence page into a vault note (Epic 7).
 
 Confluence "storage format" is XHTML carrying Atlassian-specific namespaced tags — `ac:` for macros
 and `ri:` for resource identifiers. Handing that straight to markdownify produces output littered

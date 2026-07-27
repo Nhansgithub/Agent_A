@@ -60,16 +60,14 @@ async def _collect(markers: dict, **kw):
     markers.update(kw)
 
 
-async def test_publish_runs_all_four_side_effects_in_order(tmp_path) -> None:
+async def test_publish_runs_restrict_then_move_in_order(tmp_path) -> None:
     confluence = FakeConfluence()
     tenant = make_tenant(str(tmp_path))
     markers: dict = {}
 
-    result = await Publisher(confluence).publish(
+    await Publisher(confluence).publish(
         tenant=tenant,
-        prd_id="page-1",
         page_id="draft-1",
-        page_title="Widget Guide",
         agent_account_id=AGENT_ACCOUNT,
         on_step=lambda **kw: _collect(markers, **kw),
     )
@@ -78,24 +76,18 @@ async def test_publish_runs_all_four_side_effects_in_order(tmp_path) -> None:
     assert confluence.restrictions == [("draft-1", [AGENT_ACCOUNT])]
     # (2) moved into the published folder (AD-14).
     assert confluence.moves == [("draft-1", "folder-published-1")]
-    # (3) exported to disk.
-    assert result.md_export_path is not None
-    exported = tmp_path / "page-1-widget-guide.md"
-    assert exported.exists()
-    assert "# Guide" in exported.read_text()
-    # sub-checkpoints were recorded for each step.
+    # sub-checkpoints were recorded for each step; the `.md` export is retired (D-44), so no export marker.
     assert "restriction_applied_at" in markers
     assert "moved_to_published_at" in markers
-    assert "md_exported_at" in markers
+    assert "md_exported_at" not in markers
+    assert not list(tmp_path.glob("*.md"))  # nothing written to disk
 
 
 async def test_the_restriction_always_includes_the_agent_and_space_admins(tmp_path) -> None:
     confluence = FakeConfluence()
     await Publisher(confluence).publish(
         tenant=make_tenant(str(tmp_path)),
-        prd_id="page-1",
         page_id="draft-1",
-        page_title="Guide",
         agent_account_id=AGENT_ACCOUNT,
         space_admin_account_ids=("acct-admin-x",),
         on_step=lambda **kw: _collect({}, **kw),
@@ -108,36 +100,16 @@ async def test_a_resume_skips_completed_side_effects(tmp_path) -> None:
     confluence = FakeConfluence()
     result = await Publisher(confluence).publish(
         tenant=make_tenant(str(tmp_path)),
-        prd_id="page-1",
         page_id="draft-1",
-        page_title="Guide",
         agent_account_id=AGENT_ACCOUNT,
         on_step=lambda **kw: _collect({}, **kw),
         restriction_done=True,  # already applied before the crash
         move_done=True,  # already moved
-        export_done=False,  # export had not happened
-        existing_md_path=None,
     )
 
     assert confluence.restrictions == [], "restriction not re-applied"
     assert confluence.moves == [], "move not repeated"
-    assert result.md_export_path is not None, "export still ran"
-
-
-async def test_export_is_overwrite_safe(tmp_path) -> None:
-    """A re-export on resume overwrites rather than erroring or duplicating."""
-    confluence = FakeConfluence()
-    tenant = make_tenant(str(tmp_path))
-    for _ in range(2):
-        await Publisher(confluence).publish(
-            tenant=tenant,
-            prd_id="page-1",
-            page_id="draft-1",
-            page_title="Guide",
-            agent_account_id=AGENT_ACCOUNT,
-            on_step=lambda **kw: _collect({}, **kw),
-        )
-    assert len(list(tmp_path.glob("*.md"))) == 1
+    assert result.restriction_applied is False and result.moved is False
 
 
 # ---------------------------------------------------------------------------------------------
@@ -168,16 +140,12 @@ class FakePublisher:
         self,
         *,
         tenant,
-        prd_id,
         page_id,
-        page_title,
         agent_account_id,
         space_admin_account_ids,
         on_step,
         restriction_done,
         move_done,
-        export_done,
-        existing_md_path,
     ):
         from app.agents.publisher import PublishResult
 
@@ -185,11 +153,7 @@ class FakePublisher:
         self.published_page_ids.append(page_id)
         await on_step(restriction_applied_at=utc_now())
         await on_step(moved_to_published_at=utc_now())
-        path = f"{tenant.md_export_dir}/{prd_id}.md"
-        await on_step(md_exported_at=utc_now(), md_export_path=path)
-        return PublishResult(
-            md_export_path=path, restriction_applied=True, moved=True, exported=True
-        )
+        return PublishResult(restriction_applied=True, moved=True)
 
 
 @dataclass
@@ -317,7 +281,7 @@ async def test_publishing_marks_the_run_complete() -> None:
     final = repository.state.require("page-1")
     assert final.is_complete
     assert final.completed_at is not None
-    assert final.md_export_path == "/tmp/x/page-1.md"
+    assert final.md_export_path is None  # export retired (D-44) — never written
 
 
 async def test_publishing_records_each_sub_checkpoint() -> None:
@@ -329,7 +293,7 @@ async def test_publishing_records_each_sub_checkpoint() -> None:
     final = repository.state.require("page-1")
     assert final.restriction_applied_at is not None
     assert final.moved_to_published_at is not None
-    assert final.md_exported_at is not None
+    assert final.md_exported_at is None  # export retired (D-44) — no marker written
 
 
 async def test_the_full_publish_gate_to_complete_sequence() -> None:
@@ -368,22 +332,19 @@ def test_the_restriction_is_required_by_default() -> None:
     assert make_tenant("/tmp/x").require_edit_restriction is True
 
 
-async def test_opting_out_skips_the_restriction_but_still_moves_and_exports(tmp_path) -> None:
+async def test_opting_out_skips_the_restriction_but_still_moves(tmp_path) -> None:
     confluence = FakeConfluence()
     markers: dict = {}
 
     result = await Publisher(confluence).publish(
         tenant=make_unrestricted_tenant(str(tmp_path)),
-        prd_id="page-1",
         page_id="draft-1",
-        page_title="Widget Guide",
         agent_account_id=AGENT_ACCOUNT,
         on_step=lambda **kw: _collect(markers, **kw),
     )
 
     assert confluence.restrictions == [], "no restriction call should be made"
     assert confluence.moves == [("draft-1", "folder-published-1")]
-    assert result.md_export_path is not None
     assert result.restriction_skipped is True
     assert result.restriction_applied is False
 
@@ -398,16 +359,13 @@ async def test_a_skipped_restriction_is_never_checkpointed_as_applied(tmp_path) 
 
     await Publisher(FakeConfluence()).publish(
         tenant=make_unrestricted_tenant(str(tmp_path)),
-        prd_id="page-1",
         page_id="draft-1",
-        page_title="Widget Guide",
         agent_account_id=AGENT_ACCOUNT,
         on_step=lambda **kw: _collect(markers, **kw),
     )
 
     assert "restriction_applied_at" not in markers
     assert "moved_to_published_at" in markers
-    assert "md_exported_at" in markers
 
 
 async def test_a_skipped_restriction_is_announced_on_the_publishing_ticket() -> None:
@@ -423,13 +381,9 @@ async def test_a_skipped_restriction_is_announced_on_the_publishing_ticket() -> 
         async def publish(self, **kwargs):
             self.published += 1
             await kwargs["on_step"](moved_to_published_at=utc_now())
-            path = f"{kwargs['tenant'].md_export_dir}/{kwargs['prd_id']}.md"
-            await kwargs["on_step"](md_exported_at=utc_now(), md_export_path=path)
             return PublishResult(
-                md_export_path=path,
                 restriction_applied=False,
                 moved=True,
-                exported=True,
                 restriction_skipped=True,
             )
 

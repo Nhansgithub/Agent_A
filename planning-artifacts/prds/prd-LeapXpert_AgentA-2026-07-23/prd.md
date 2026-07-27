@@ -209,6 +209,15 @@ When the Publishing ticket is marked Done, the agent SHALL:
 3. **Export** the final UserDoc as a **Markdown file** to **server storage** (the running server's disk), for the later SSG step.
 4. Mark the flow **Complete** in the state store.
 
+> **Amendment 2026-07-27 (FR-15a — step 3 `.md` export retired).** Step 3 above (export the final
+> UserDoc to a server-disk `.md`) is **removed**. Its sole purpose was to feed a later static-site step;
+> that consumer is now **Agent B** (Epic 7), which ingests the published UserDoc by **pulling the
+> Confluence space** into its own vault — so a redundant `.md` copy on the agent's disk serves nothing.
+> On publish the agent now does **restrict → move → mark complete**. The `md_export_dir` config field
+> and the `md_export_path` / `md_exported_at` state fields are **deprecated**: no longer written, kept
+> nullable so the live DB needs no rebuild (see DECISION-LOG **D-44**). The storage→Markdown converter
+> itself lives on — Agent B's pull uses it.
+
 > **Amendment 2026-07-26 (FR-16 — draft-deletion detection & human-gated recovery).** If the UserDoc
 > **draft page** is deleted (moved to trash) while a run is in flight, the agent SHALL detect it and
 > **ask the Reviewer PM before doing anything** — it must **never auto-recover**, because a deletion
@@ -278,7 +287,7 @@ The Flow is decomposed into role-specialized agents, each with its own **SKILL.m
 | **Ticket manager** | Search/update/create Jira tickets & transitions (FR-04, FR-06, FR-13) | Jira API |
 | **Author** | Draft & revise the UserDoc, incl. self-critique (FR-05, FR-11) | Confluence read/write |
 | **Feedback interpreter** | Parse structured/plain feedback; run structure-confirmation loop; judge when to ask clarifying questions (FR-08, FR-09, FR-10) | Jira comments |
-| **Publisher** | Lock, move, export `.md` (FR-15) | Confluence API, filesystem |
+| **Publisher** | Lock, move (FR-15; `.md` export retired — FR-15a) | Confluence API |
 | **Error handler** | Surface errors to Jira + admin, manage resume (see §8) | Jira comments, state store |
 
 Roles may be implemented as separate prompt/skill configurations over a shared agent runtime rather than separate services. All agents run on the **Anthropic Claude API**.

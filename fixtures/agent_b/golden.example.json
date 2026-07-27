@@ -1,0 +1,17 @@
+{
+  "_comment": "S-B9 golden set TEMPLATE. Replace the placeholder page_ids with the real Confluence page ids from the deployed KB (see fixtures/agent_b/README.md), then run scripts/run_agent_b_eval.py against the live indexed vault. `expected_page_ids` are the notes that should be retrieved/cited; `expect_refusal: true` marks a question the KB has no doc for (the bot must refuse, never fabricate).",
+  "cases": [
+    {
+      "question": "How does a user onboard for the first time?",
+      "expected_page_ids": ["REPLACE_ONBOARDING_PRD_PAGE_ID"]
+    },
+    {
+      "question": "What are the billing and invoicing rules?",
+      "expected_page_ids": ["REPLACE_BILLING_PRD_PAGE_ID"]
+    },
+    {
+      "question": "What is the company vacation policy?",
+      "expect_refusal": true
+    }
+  ]
+}

@@ -693,3 +693,146 @@ live — SETUP-GUIDE Part 7c.
 **Tests:** +20 (adapter v1/v2/footer, parse + structural fallback, routing, interpreter restatement,
 orchestrator pickup + exact-commenter mention + hand-off + state round-trip). Suite **548 green**, ruff
 clean, 5/5 contracts.
+
+---
+
+## Epic 7 — Agent B (internal Knowledge Base + Slack Q&A)
+
+### D-41 · Agent B = a monorepo sibling projecting Confluence into a read-only Obsidian vault  (2026-07-27, story S-B0)
+**Context:** A second agent must turn PRDs, designs, and Agent A's UserDocs into an internal knowledge
+base a team can navigate as a linked graph (Obsidian-style) and query in Slack — explicitly *not* "just
+Confluence".
+**Decision:** Build `agent_b/` as a sibling package in this repo (monorepo), reusing Agent A's
+adapters / LLM / config / tracing by injection. The KB is a **git-backed Obsidian vault** (Markdown +
+`[[wikilinks]]`), treated as a **read-only projection** of Confluence: humans edit Confluence (source of
+record); the vault is regenerated idempotently and its edits are overwritten. Confluence stays the store;
+the vault adds the graph/navigation Confluence lacks. `confluence-md` may seed the one-shot bootstrap;
+the incremental path uses Agent A's own `ConfluenceAdapter` + `storage_to_markdown`.
+**Invariants:** AD-1 mirrored for `agent_b` (only adapters do HTTP, only the repository does SQL — new
+import-linter contracts) → AD-27, AD-28, AD-32.
+
+### D-42 · Organization is metadata (MOC + tags), never physical file moves  (2026-07-27, S-B0)
+**Context:** The Confluence hierarchy is messy; the ask is a "clean, well-organized" KB. The tempting
+move — an LLM reshuffling files into a nicer folder tree each run — churns a git vault, breaks
+`[[links]]`, and destabilizes the graph (LLM non-determinism).
+**Decision:** Deliver organization as **stable metadata** — per-topic MOC (Map of Content) hub notes + a
+tag taxonomy + frontmatter — over a **stable, id-based layout** (`notes/<page_id>-<slug>.md`). Obsidian
+navigates by links/tags/graph, not folders. → AD-29.
+
+### D-43 · Local, no-egress embeddings via fastembed + sqlite-vec (not torch)  (2026-07-27, S-B0)
+**Context:** Owner chose vector RAG with **local** embeddings (no corpus egress). `sentence-transformers`
+pulls PyTorch (hundreds of MB), which would blow the 1 GB envelope (AD-21) next to Agent A.
+**Decision:** Embed with **`fastembed`** (ONNX runtime, quantized `bge-small-en-v1.5`, ~130 MB resident)
+into a **`sqlite-vec`** store. The heavy pull/convert/curate/embed runs as a short-lived nightly job;
+only the Slack query path + the embed model stay resident, with the box's swap file as cushion. → AD-31.
+
+### D-44 · Retire Agent A's FR-15 `.md` export; deprecate the columns rather than migrate  (2026-07-27, S-B0)
+**Context:** Agent A writes the approved UserDoc to `md_export_dir` "for the later SSG step"
+(`app/agents/publisher.py`). Agent B **is** that step, and it re-pulls the published UserDoc from
+Confluence — so the separate export is redundant. Owner asked to remove it.
+**Decision:** In S-B8, stop writing the `.md` and remove the publisher's export step. **Deprecate**
+`md_export_dir` (config) and `md_export_path` / `md_exported_at` (state + DB) — stop writing them, leave
+the DB columns nullable — to avoid a rebuild of the live Droplet SQLite. FR-15 is amended in the PRD. The
+KB becomes eventually-consistent (next scheduled pull) rather than publish-instant, which is correct for
+a KB.
+**Implemented (2026-07-27, S-B8):** Publisher does restrict→move only (`PublishResult` lost
+`md_export_path`/`exported`; `_write_export` + the `md_export_dir` read removed); `md_export_dir` is now
+optional/ignored in `TenantConfig`; `md_export_path`/`md_exported_at` stay nullable in state + DB (never
+written); PRD amended **FR-15a**; author `SKILL.md` + `markdown.py` docstrings updated.
+
+### D-45 · The KB URL is public, no auth (owner's call)  (2026-07-27, S-B0)
+**Context:** The KB is for internal teams; owner chose "open internally, no filtering". The Droplet is
+internet-facing (Caddy serves `poetroastery.com`).
+**Decision:** Serve the Quartz site read-only at `agent.poetroastery.com` with **no authentication** and
+**no restricted-page filtering** — the whole curated pull is world-readable. Consequence explicitly
+accepted by the owner: anything pulled into the KB is public. Reversible later via a single Caddy
+basic-auth line or an IP/Tailscale allowlist; **no per-user ACLs are built.**
+
+### D-46 · Tiered linking with quarantined LLM suggestions; grounded, refusing Q&A  (2026-07-27, S-B0)
+**Context:** Auto-linking is the KB's core value *and* its main quality risk — false edges pollute the
+graph and mislead retrieval. Q&A over internal docs must not fabricate.
+**Decision:** Links are **tiered**: hierarchy (deterministic) and restored references (a link that
+survived conversion) are inlined as `[[links]]`; LLM-inferred "these relate" links are **quarantined** to
+a `related_suggested:` block, never inlined (→ AD-30). Q&A always **cites** its source notes and
+**refuses** ("I don't have a doc on that") when the top retrieval score is below `rag.min_score`,
+mirroring the classifier's 0-FP discipline.
+
+### D-47 · Deletions are tombstoned (not purged); one git commit per pull; image binaries split out  (2026-07-27, S-B4)
+**Context:** S-B4 turns the S-B1 baseline into a maintained pull. Three sub-choices had to be settled:
+what to do with a page that vanishes from Confluence, how the vault is versioned, and whether the
+deferred image-binary fetch belongs in this story.
+**Decision:** (a) A vanished page is **tombstoned** — its note file removed and every edge dropped, but
+its `documents` row kept with `deleted_at` set — rather than hard-deleted. (b) Each maintained pull that
+touches anything makes **one git commit** of the vault (via an injected `VaultVcs`; `GitVault` is the
+real impl), and writes a `pull_runs` ledger row (counts + `ok`/`error`). An unchanged pull makes **no**
+empty commit. (c) The image-binary → `assets/` fetch is **split into its own story S-B10**, not bundled
+here.
+**Rationale:** (a) A tombstone lets a re-added page un-tombstone cleanly (idempotency, D-41) and keeps
+an audit trail; a live link to a purged page would render a dead `[[wikilink]]`, so edges are cleaned on
+tombstone. (b) The vault is a generated projection (AD-28); git history is its audit trail and the
+substrate Quartz (S-B5) builds from. Cron over an always-on scheduler mirrors AD-22/AD-21 (no resident
+process on the 1 GB box). (c) Binary attachment download requires extending the **shared Agent A**
+`AtlassianClient` (which only decodes JSON today) to fetch bytes — a different boundary than S-B4's
+vault-maintenance concern, and absent from S-B4's written acceptance criteria. Splitting keeps each
+story's DoD honest.
+**Alternatives rejected:** hard-delete on removal (loses audit + breaks clean re-add); commit-every-run
+(pollutes history with empty commits); bundling assets into S-B4 (mixes two boundaries, bloats the diff).
+**Revisit if:** a purge/retention policy is needed for tombstoned rows, or Quartz needs a different
+versioning substrate than per-run commits.
+
+### D-48 · Quartz built off-box; AI-suggested links rendered as an Obsidian callout  (2026-07-27, S-B5)
+**Context:** S-B5 needs the vault browsable at a URL with the AI-suggested links "visually distinct"
+(the criterion), while the runtime host is a 1 GB box (AD-21) and the vault must stay Obsidian-faithful.
+**Decision:** (a) Quartz (Node SSG) is the renderer; its build runs **off-box** (CI / a build host) via
+`deploy/build_site.sh`, never on the Droplet — the box only *serves* the pre-built static files through
+a new `agent.poetroastery.com` Caddy vhost (read-only, no auth, D-45). The Python seam
+(`agent_b.pipeline.publish`) is the unit-tested part: config generation (baseUrl from config, AD-4) +
+byte-for-byte content staging. (b) The linker renders AI-suggested links as a
+`> [!tip] Suggested (AI — unverified)` **Obsidian callout** rather than a plain bullet — a distinct
+titled box in both Obsidian and Quartz, with a shipped `custom.scss` styling it.
+**Rationale:** (a) A Node build can OOM on 1 GB exactly like the Docker build (AD-21's off-box rule);
+serving static files is cheap and safe. (b) A callout is the native Obsidian/Quartz idiom for "treat
+this block with care" — it satisfies "visually distinct" without inlining links into prose (AD-30) and
+without a fragile CSS-class hook, and it keeps the vault a faithful Obsidian artifact.
+**Alternatives rejected:** building Quartz on the Droplet (OOM risk); a bespoke SSG (reinvents Quartz's
+graph/backlinks/search); marking suggestions with a raw `<div class>` (Quartz sanitizes HTML; brittle).
+**Revisit if:** Quartz's plugin API changes the config shape, or the KB outgrows a static site and needs
+server-side search/auth (would reopen D-45).
+
+### D-49 · Vector store = numpy cosine in Agent B's own SQLite, not sqlite-vec  (2026-07-27, S-B6)
+**Context:** D-43 picked `sqlite-vec` for the RAG index. But `sqlite-vec` is a **loadable SQLite
+extension**, and both this dev Python and the `python:3.12-slim` base build sqlite3 **without**
+`enable_load_extension` (`sqlite3.Connection.enable_load_extension` is absent). The extension cannot be
+loaded, so `sqlite-vec` is unusable in the runtime we ship.
+**Decision:** Keep `fastembed` (D-43 — local ONNX embeddings, works fine; no extension needed). Store
+each chunk's embedding as a **float32 BLOB** in a `chunks` table in Agent B's own SQLite store (AD-32),
+and retrieve by a **brute-force numpy cosine** over all chunks. This supersedes the `sqlite-vec` half of
+D-43. `EmbeddingsConfig.store` is removed; `chunk_chars`/`chunk_overlap` added.
+**Rationale:** For an internal KB (dozens–hundreds of notes → a few thousand chunks) a full cosine scan
+is sub-millisecond, so the vector-DB machinery buys nothing here; it drops a fragile native dependency,
+stays inside the 1 GB box (AD-21), and keeps everything in the "one SQLite store" spirit (AD-32). The
+retriever is behind an interface, so a swap to a real vector index later is a localized change.
+**Alternatives rejected:** rebuilding Python with `--enable-loadable-sqlite-extensions` (non-reproducible
+on the slim base, and `pip` is deny-ruled here); a separate FAISS/annoy index (native dep + a second
+store, over-built for the corpus size).
+**Revisit if:** the corpus grows to where a linear scan is too slow (tens of thousands of chunks), or a
+base image with loadable extensions is adopted — then reconsider a real ANN index.
+
+### D-50 · Image assets: a shared-transport binary read + a deterministic local-path rewrite  (2026-07-27, S-B10)
+**Context:** The S-B1 converter kept image *references* as bare filenames but never fetched the binaries
+(deferred to S-B4, then split to S-B10 by D-47). The shared `AtlassianClient` only decoded JSON.
+**Decision:** Add one binary read to the shared transport — `AtlassianClient.download(path) -> bytes`
+(same retry/`AgentError` path as `request`, returns `response.content`) — and two additive Confluence
+verbs (`list_attachments`, `download_attachment`). Agent B's pull writes a page's **image** attachments
+to `vault/assets/<page_id>/` and `render_note` **deterministically** rewrites `![alt](file)` →
+`![alt](../assets/<page_id>/file)` (external URLs untouched). The fetch is idempotent (skip unchanged
+bytes) and incremental (only added/changed pages, off S-B4); tombstoning removes a page's asset dir.
+**Rationale:** The ref rewrite is pure/deterministic so it rides in `base_content` and survives the
+linker's re-derivation without disturbing idempotency; the binary fetch is a separate I/O pass, injected
+into `sync_vault` as an optional `AssetFetcher` so the offline suite and the existing sync tests need no
+attachment-capable fake. The `download` verb stays on the transport (AD-1/AD-7 — only adapters touch
+Atlassian); no new architectural rule needed.
+**Alternatives rejected:** rewriting refs in a post-link pass (would fight the linker's re-derivation and
+re-hash notes non-deterministically); downloading *all* attachments (pulls non-image files nobody
+references); a global attachments dir (collisions across pages with same-named images).
+**Revisit if:** notes start referencing non-image attachments (PDFs) that should also be mirrored.
