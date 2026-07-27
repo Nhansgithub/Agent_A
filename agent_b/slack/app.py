@@ -37,8 +37,14 @@ def build_socket_mode_app(
         reply = await handler.handle_query(query)
         if reply is None:
             return
-        # Only pass thread_ts when the handler chose to thread — a DM reply omits it, so it posts inline.
-        say_kwargs: dict[str, Any] = {"text": reply.text}
+        # unfurl_*: off — the Sources section already shows clean titled links; Slack's preview cards
+        # would add one bulky (and login-gated, for Confluence) card per link. Only pass thread_ts when
+        # the handler chose to thread — a DM reply omits it, so it posts inline.
+        say_kwargs: dict[str, Any] = {
+            "text": reply.text,
+            "unfurl_links": False,
+            "unfurl_media": False,
+        }
         if reply.thread_ts:
             say_kwargs["thread_ts"] = reply.thread_ts
         posted = await say(**say_kwargs)
