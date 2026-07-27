@@ -639,6 +639,7 @@ Run the verifier one more time:
 .venv/bin/python scripts/verify_setup.py
 ```
 
+=============================================
 When it is green, tell me and I will wire the live integration and run the end-to-end demo. Parts 1–6
 are enough to unblock nearly everything; Parts 7–8 are only needed for the final deployed run.
 
@@ -652,3 +653,12 @@ docker push ghcr.io/nhansgithub/agent_b_bot:latest
 
 # 3. Deploy Agent B (bot + nightly pull)
 ./deploy/agent_b.sh
+=============================================
+A nightly job (03:00) re-reads Confluence: new pages become answerable, edited pages update, deleted pages drop out, and images get pulled in. So the flow is: write/publish in Confluence → it's in the bot by the next morning. Nothing to do manually.
+
+Want it now instead of waiting for the night? Run one pull on the box:
+```
+docker run --rm --env-file /opt/agent/.env \
+  -v /opt/agent/config:/app/config:ro -v /data:/app/data \
+  ghcr.io/nhansgithub/agent_b_bot:latest python scripts/run_agent_b_pull.py
+```

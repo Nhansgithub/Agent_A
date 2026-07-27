@@ -60,9 +60,16 @@ def main() -> int:
         set_quartz_base_url(cfg_path.read_text(encoding="utf-8"), config.publish.base_url),
         encoding="utf-8",
     )
+    # APPEND our callout rule to Quartz's custom.scss — never overwrite it: its first line is
+    # `@use "./base.scss";`, which pulls in the entire layout stylesheet (the sidebar grid). Clobbering
+    # that produced a styled-but-stacked, sidebar-less page. build_site.sh resets it to pristine first,
+    # and the marker guard keeps a standalone re-run from appending twice.
     styles = quartz / "quartz" / "styles"
     styles.mkdir(parents=True, exist_ok=True)
-    (styles / "custom.scss").write_text(render_custom_css(), encoding="utf-8")
+    custom = styles / "custom.scss"
+    base = custom.read_text(encoding="utf-8") if custom.exists() else ""
+    if "agent_b.pipeline.publish" not in base:  # our render_custom_css marker
+        custom.write_text(base.rstrip() + "\n\n" + render_custom_css(), encoding="utf-8")
     staged = stage_content(config.vault_dir, str(quartz / "content"))
     # Quartz builds the site root (index.html) only from content/index.md — the vault has none, so
     # write one, or the homepage 404s (per-note URLs still resolve).
