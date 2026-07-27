@@ -10,6 +10,7 @@ from agent_b.pipeline import (
     render_index_md,
     render_note,
     set_quartz_base_url,
+    set_quartz_page_title,
     stage_content,
 )
 from agent_b.repository import AgentBRepository
@@ -30,6 +31,19 @@ def test_set_quartz_base_url_patches_only_the_url() -> None:
     assert 'baseUrl: "agent.poetroastery.com"' in out  # bare host, no scheme/slash (AD-4)
     assert "quartz.jzhao.xyz" not in out  # the placeholder is gone
     assert "theme: { colors" in out and 'pageTitle: "🪴 Quartz 4"' in out  # everything else intact
+
+
+def test_set_quartz_page_title_replaces_the_site_name() -> None:
+    default = '    pageTitle: "🪴 Quartz 4",\n    baseUrl: "quartz.jzhao.xyz",\n'
+    out = set_quartz_page_title(default, "Knowledge Base")
+    assert 'pageTitle: "Knowledge Base"' in out
+    assert "Quartz 4" not in out
+    assert 'baseUrl: "quartz.jzhao.xyz"' in out  # only the title changed
+
+
+def test_index_md_uses_the_configured_title() -> None:
+    index = render_index_md("Knowledge Base")
+    assert 'title: "Knowledge Base"' in index and "# Knowledge Base" in index
 
 
 def test_custom_css_targets_the_suggested_callout() -> None:

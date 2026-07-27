@@ -138,6 +138,7 @@ agent_b:
   publish:
     base_url: "https://REPLACE_KB_HOST"
     output_dir: "data/site"
+    site_title: "Internal Knowledge Base"   # the site name shown top-left in the nav
   slack:
     bot_token_ref: "env:AGENTB_SLACK_BOT_TOKEN"
     app_token_ref: "env:AGENTB_SLACK_APP_TOKEN"

@@ -10,6 +10,7 @@ from agent_b.pipeline.publish import (
     render_custom_css,
     render_index_md,
     set_quartz_base_url,
+    set_quartz_page_title,
     stage_content,
 )
 from agent_b.pipeline.sync import PullResult, SyncStats, run_pull, sync_vault
@@ -42,6 +43,7 @@ __all__ = [
     "render_note",
     "run_pull",
     "set_quartz_base_url",
+    "set_quartz_page_title",
     "slugify",
     "stage_content",
     "sync_vault",

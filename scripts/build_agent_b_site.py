@@ -28,6 +28,7 @@ def main() -> int:
         render_custom_css,
         render_index_md,
         set_quartz_base_url,
+        set_quartz_page_title,
         stage_content,
     )
 
@@ -56,10 +57,12 @@ def main() -> int:
     # we keep Quartz's version-correct theme/layout/plugins — a hand-written config shipped an unstyled
     # site (missing theme palette).
     cfg_path = quartz / "quartz.config.ts"
-    cfg_path.write_text(
-        set_quartz_base_url(cfg_path.read_text(encoding="utf-8"), config.publish.base_url),
-        encoding="utf-8",
-    )
+    cfg_ts = cfg_path.read_text(encoding="utf-8")
+    cfg_ts = set_quartz_base_url(cfg_ts, config.publish.base_url)
+    cfg_ts = set_quartz_page_title(
+        cfg_ts, config.publish.site_title
+    )  # the site name (top-left nav)
+    cfg_path.write_text(cfg_ts, encoding="utf-8")
     # APPEND our callout rule to Quartz's custom.scss — never overwrite it: its first line is
     # `@use "./base.scss";`, which pulls in the entire layout stylesheet (the sidebar grid). Clobbering
     # that produced a styled-but-stacked, sidebar-less page. build_site.sh resets it to pristine first,
@@ -73,7 +76,9 @@ def main() -> int:
     staged = stage_content(config.vault_dir, str(quartz / "content"))
     # Quartz builds the site root (index.html) only from content/index.md — the vault has none, so
     # write one, or the homepage 404s (per-note URLs still resolve).
-    (quartz / "content" / "index.md").write_text(render_index_md(), encoding="utf-8")
+    (quartz / "content" / "index.md").write_text(
+        render_index_md(config.publish.site_title), encoding="utf-8"
+    )
     print(
         f"staged {staged} note(s) + index.md into {quartz / 'content'}; "
         "wrote quartz.config.ts + custom.scss"

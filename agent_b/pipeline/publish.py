@@ -27,6 +27,7 @@ from pathlib import Path
 
 _NOTES_SUBDIR = "notes"
 _BASEURL_LINE = re.compile(r'baseUrl:\s*"[^"]*"')
+_PAGETITLE_LINE = re.compile(r'pageTitle:\s*"[^"]*"')
 
 
 def set_quartz_base_url(config_ts: str, base_url: str) -> str:
@@ -39,15 +40,22 @@ def set_quartz_base_url(config_ts: str, base_url: str) -> str:
     return _BASEURL_LINE.sub(f'baseUrl: "{host}"', config_ts, count=1)
 
 
-def render_index_md() -> str:
+def set_quartz_page_title(config_ts: str, title: str) -> str:
+    """Return Quartz's config with only its `pageTitle` (the top-left site name) replaced (AD-4)."""
+    safe = title.replace("\\", "\\\\").replace('"', '\\"')
+    return _PAGETITLE_LINE.sub(f'pageTitle: "{safe}"', config_ts, count=1)
+
+
+def render_index_md(title: str = "Internal Knowledge Base") -> str:
     """The vault has no landing page, but Quartz builds the site root (`index.html`) only from a
     `content/index.md`. Without it the homepage 404s (per-note URLs still work). This is that page —
     a thin welcome; the explorer, search, and graph do the actual navigation."""
+    safe = title.replace('"', "'")
     return (
         "---\n"
-        'title: "Internal Knowledge Base"\n'
+        f'title: "{safe}"\n'
         "---\n\n"
-        "# Internal Knowledge Base\n\n"
+        f"# {title}\n\n"
         "Search (top), or use the explorer and graph to browse. Every note here is generated from "
         "Confluence — open a note and follow its source link to the original page.\n"
     )

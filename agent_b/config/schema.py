@@ -79,6 +79,8 @@ class PublishConfig(BaseModel):
 
     base_url: str = "https://agent.poetroastery.com"
     output_dir: str = "data/site"
+    site_title: str = "Internal Knowledge Base"
+    """The site's display name — Quartz's `pageTitle` (top-left nav). Config, not a literal (AD-4)."""
 
 
 class AgentBConfig(BaseModel):
