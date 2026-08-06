@@ -81,6 +81,17 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$DROPLET_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 
+      - name: Fetch the box's registry.yaml (config lives on the box, gitignored)
+        # config/registry.yaml is gitignored (AD-4: real tenant ids never enter git or the image), so it
+        # isn't in the runner's checkout. The site build (scripts/build_agent_b_site.py) needs it for the
+        # config-driven baseUrl + output_dir. Borrow it transiently from the box — the config's only home
+        # besides the laptop; it's never committed here, and secrets stay as unresolved env: refs. The
+        # site build only reads publish/vault config, not credentials, so no env resolution happens.
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+        run: scp "root@${DROPLET_HOST}:/opt/agent/config/registry.yaml" ./config/registry.yaml
+
       - name: Build off-box and publish (deploy/site.sh)
         # Reuse the exact hand-run path. DROPLET overrides site.sh's baked-in default; PYTHON points
         # build_site.sh at the runner's interpreter (its default is the local ./.venv, absent in CI).

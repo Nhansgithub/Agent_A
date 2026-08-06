@@ -218,6 +218,8 @@ add two **repo Actions secrets** (Settings → Secrets and variables → Actions
 Until both secrets exist the workflow no-ops with a warning (no failing nightly runs); `site.sh` by hand
 stays the fallback. Trigger a one-off refresh anytime from Actions → **Publish KB site** → *Run workflow*.
 The job reuses `deploy/site.sh` verbatim (which calls `deploy/build_site.sh` → `scripts/build_agent_b_site.py`).
+Because `config/registry.yaml` is gitignored (it's not in the runner's checkout), the job first `scp`s it
+down from the box's `/opt/agent/config/registry.yaml` — so keep the box's config current (`push-config.sh`).
 
 ### 4. (Optional) The Q&A eval gate — S-B9
 
