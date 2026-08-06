@@ -1,0 +1,91 @@
+# Nightly publish of the Agent B KB site (S-B5 / S-04) — the automated equivalent of running
+# `deploy/site.sh` by hand. It runs AFTER the box's 03:00 nightly pull (deploy/agent_b_pull.cron) has
+# refreshed the vault, so the published site tracks the vault instead of drifting stale until someone
+# rebuilds it manually. (The Slack bot already reads the freshly-pulled index live; only the static site
+# needed this.)
+#
+# Why a CI job and not a box cron (D-53): a Node/Quartz build can OOM the 1 GB Droplet (AD-21) — the same
+# reason the Docker images are built off-box, and the box has no Node. So the build runs on the GitHub
+# runner: pull the freshly-synced vault DOWN from the box, `npx quartz build` HERE, push the static site
+# back to Caddy's web root, reload Caddy. The box only ever serves the pre-built files (read-only, no
+# auth — D-45). This reuses deploy/site.sh verbatim — one tested path, not a second copy.
+#
+# Gate (B-4): the live run needs two repo Actions secrets — DROPLET_HOST (the box's IP/hostname) and
+# DROPLET_SSH_KEY (a private deploy key whose public half is in the box's root authorized_keys). Until
+# both are set the job **no-ops with a warning** (no nightly red X). See implementation-state/BLOCKERS.md.
+
+name: Publish KB site
+
+on:
+  schedule:
+    # 04:00 UTC daily — one hour after the box's 03:00 UTC pull cron, leaving the pull time to finish.
+    # Both the box and GitHub Actions run cron in UTC (DigitalOcean droplets default to UTC).
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+# One publish at a time: a manual dispatch and the nightly run must not race on the same rsync target.
+concurrency:
+  group: publish-site
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # Secrets can't be read in a job-level `if:`, so gate every step on this check instead. Missing
+      # secrets = the publish isn't configured yet (B-4) → warn and skip, don't fail (a scheduled job
+      # that red-X'd every night until B-4 is closed would just be noise).
+      - name: Check the publish is configured (B-4)
+        id: gate
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
+        run: |
+          if [ -n "$DROPLET_HOST" ] && [ -n "$DROPLET_SSH_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=KB publish not configured::Set the DROPLET_HOST + DROPLET_SSH_KEY repo secrets to enable the nightly KB site refresh (BLOCKERS B-4). Skipping."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.configured == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.configured == 'true'
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.configured == 'true'
+        with:
+          node-version: "22"
+
+      - name: Install the package (site prep imports agent_b.config + agent_b.pipeline)
+        # build_agent_b_site.py (called by build_site.sh) imports agent_b.config + agent_b.pipeline —
+        # neither pulls the heavy embedding stack, but installing the extra keeps the runner identical to
+        # the box image and is future-proof if the prep step grows a dependency.
+        if: steps.gate.outputs.configured == 'true'
+        run: pip install -e ".[agent_b]"
+
+      - name: Configure SSH to the Droplet
+        # Write the deploy key + trust the box's host key so site.sh's ssh/scp/rsync authenticate
+        # non-interactively. The key lives only on this ephemeral runner and is masked in logs.
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DROPLET_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DROPLET_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Build off-box and publish (deploy/site.sh)
+        # Reuse the exact hand-run path. DROPLET overrides site.sh's baked-in default; PYTHON points
+        # build_site.sh at the runner's interpreter (its default is the local ./.venv, absent in CI).
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          DROPLET: root@${{ secrets.DROPLET_HOST }}
+          PYTHON: python
+        run: ./deploy/site.sh

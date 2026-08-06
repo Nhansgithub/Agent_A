@@ -205,6 +205,20 @@ builds the Quartz site, uploads it to `/opt/agent/data/site`, installs the Caddy
 `agent.poetroastery.com` vhost — read-only, no auth, D-45), and reloads Caddy. Re-run it after any pull
 to refresh the site. `deploy/build_site.sh` is the build-only step it calls if you want it standalone.
 
+**Automated nightly refresh (S-04 / D-53).** You normally don't run `site.sh` by hand at all: the
+`.github/workflows/publish-site.yml` CI job runs it **for you** on the GitHub runner at **04:00 UTC** —
+one hour after the box's 03:00 pull cron — so the published site tracks the vault instead of going stale.
+The build stays off the 1 GB box (AD-21); the runner does exactly what your laptop would. To enable it,
+add two **repo Actions secrets** (Settings → Secrets and variables → Actions):
+
+- `DROPLET_HOST` — the box's IP/hostname (e.g. `143.198.218.143`).
+- `DROPLET_SSH_KEY` — a **private** SSH deploy key whose public half is in the box's
+  `root@…:~/.ssh/authorized_keys`.
+
+Until both secrets exist the workflow no-ops with a warning (no failing nightly runs); `site.sh` by hand
+stays the fallback. Trigger a one-off refresh anytime from Actions → **Publish KB site** → *Run workflow*.
+The job reuses `deploy/site.sh` verbatim (which calls `deploy/build_site.sh` → `scripts/build_agent_b_site.py`).
+
 ### 4. (Optional) The Q&A eval gate — S-B9
 
 Fill `fixtures/agent_b/golden.json` with real page ids (README there) and run

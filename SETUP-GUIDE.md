@@ -639,25 +639,32 @@ Run the verifier one more time:
 .venv/bin/python scripts/verify_setup.py
 ```
 
-=============================================
-When it is green, tell me and I will wire the live integration and run the end-to-end demo. Parts 1–6
-are enough to unblock nearly everything; Parts 7–8 are only needed for the final deployed run.
-
-# 1. Push (ships Agent A's S-B8/S-B10 changes; CI builds :latest)
+# Deploy & Redeploy
+## 1. Push (ships Agent A's S-B8/S-B10 changes; CI builds :latest)
+- After making any changes to the Agent A, commit and push the code to origin, this will start the CI build automatically.
+```bash
 git push origin master
-./deploy/redeploy.sh                    # redeploy Agent A
+```
+- Then redeploy Agent A to the Droplet
+```bash
+./deploy/redeploy.sh
+```
 
-# 2. Build + push the Agent B image OFF the box (a build on 1 GB can OOM)
+## 2. Build + push the Agent B image OFF the box (a build on 1 GB can OOM)
+- Same if you have changes with Agent B, commit + push + CI build auto
+```bash
 docker build -f deploy/Dockerfile.agent_b -t ghcr.io/nhansgithub/agent_b_bot:latest .
 docker push ghcr.io/nhansgithub/agent_b_bot:latest
-
-# 3. Deploy Agent B (bot + nightly pull)
+```
+## 3. Deploy Agent B (bot + nightly pull)
+```bash
 ./deploy/agent_b.sh
-=============================================
+```
+============================================
 A nightly job (03:00) re-reads Confluence: new pages become answerable, edited pages update, deleted pages drop out, and images get pulled in. So the flow is: write/publish in Confluence → it's in the bot by the next morning. Nothing to do manually.
 
 Want it now instead of waiting for the night? Run one pull on the box:
-```
+```bash
 docker run --rm --env-file /opt/agent/.env \
   -v /opt/agent/config:/app/config:ro -v /data:/app/data \
   ghcr.io/nhansgithub/agent_b_bot:latest python scripts/run_agent_b_pull.py

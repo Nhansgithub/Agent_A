@@ -11,6 +11,17 @@
 
 ## Agile iteration (post-build)
 
+2026-08-06 · **S-04 Automated nightly KB-site publish** (D-53) — new scheduled CI workflow
+[.github/workflows/publish-site.yml](../.github/workflows/publish-site.yml) runs `deploy/site.sh` on the
+GitHub runner at **04:00 UTC** (1h after the box's 03:00 pull cron), so the public Quartz KB
+(`agent.<domain>`) auto-refreshes off the freshly-pulled vault instead of drifting stale until a manual
+`./deploy/site.sh`. Reuses the tested off-box path verbatim (rsync vault down → `npx quartz build` on the
+runner → rsync site up → reload Caddy); the Node build never runs on the 1 GB box (AD-21). Gated on two
+repo secrets `DROPLET_HOST` + `DROPLET_SSH_KEY` (BLOCKERS **B-4**) — until both are set the job no-ops with
+a `::warning::` (no nightly failure noise). Docs: DECISION-LOG D-53, deploy/README "Agent B site" section,
+CLAUDE.md Codebase Map, BLOCKERS B-4. Workflow + docs only — no app code, no test-count change; `make
+check` green (619 passed, 7/7 contracts).
+
 2026-07-28 · **Agent B conversation memory** (D-52) — the bot now remembers a conversation so follow-ups resolve ("why?", "the second one", "tell me more"). `qa_log` gains a `conversation_key` (guarded `ALTER TABLE` migration — no live-DB rebuild) + `recent_qa(key, limit=6)`; the Slack handler keys a DM by its channel and each channel thread by its root, loads the last ~6 turns, and passes them to the Answerer (a "Recent conversation" prompt block + rewritten SKILL). Memory only helps it *understand* the message — doc facts still come only from retrieved passages (AD-30). `qa.answer_question` retries retrieval with recent turns folded in **only** when the current message alone matched nothing (no dilution for self-contained questions). Also: DM replies now post **inline** (channels still thread), and source links use canonical `/wiki/spaces/<KEY>/pages/<id>`. `make check` green (619 passed, 7/7 contracts).
 
 2026-07-28 · **Agent B live-tuning** — (1) Site name is now config-driven (`PublishConfig.site_title`); the build patches Quartz's `pageTitle` (was the default "Quartz 4") → "Knowledge Base". (2) **Answerer made conversational** (D-51): no more cold "I don't have a doc on that." — it always calls the model with the passages **+ a catalog of all docs**, so it greets, lists/suggests docs, warmly guides when nothing matched, and **replies in the user's language**, while still never fabricating doc facts (AD-30). Refusal (= no grounded hits ⇒ no Sources) still drives eval/logging; `SKILL.md` rewritten. Also fixed the site rollout: unstyled page (was overwriting Quartz's config → now patch only baseUrl), sidebar-less layout (`custom.scss` clobbered Quartz's `@use "./base.scss"` → now appended), homepage 404 (added `content/index.md`), and the Slack bot silence (missing `aiohttp` for async Socket Mode). `make check` green (612 passed, 7/7 contracts).

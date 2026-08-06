@@ -4,7 +4,7 @@
 > Keep it short. Update it at every story boundary (in the same step as a green `make check`), never as
 > a later cleanup pass. If this file and reality disagree, this file is the bug.
 
-**Last updated:** 2026-07-27
+**Last updated:** 2026-08-06
 **Phase:** **Epic 7 — Agent B is CODE-COMPLETE.** All stories S-B0…S-B10 done and green. Agent A is
 code-complete and live. Only **live-activation gates** remain (human/3rd-party), no code.
 
@@ -25,7 +25,10 @@ box** (needs droplet SSH — B-4; cannot be done from the build env):
 1. Push `master` → CI rebuilds Agent A `:latest` (ships S-B8/S-B10 app changes) → `./deploy/redeploy.sh`.
 2. Build the Agent B image off-box: `docker build -f deploy/Dockerfile.agent_b -t ghcr.io/nhansgithub/agent_b_bot:latest . && docker push …`; mirror the `agent_b:` block into `/opt/agent/config/registry.yaml`.
 3. `./deploy/agent_b.sh` — seeds vault+index, starts the `agent-b` Slack bot, installs the nightly cron.
-4. (Optional) S-B5 site: A record + `deploy/build_site.sh` + serve; S-B9: fill `fixtures/agent_b/golden.json` + `run_agent_b_eval.py`.
+4. (Optional) S-B5 site: A record + `deploy/build_site.sh` + serve. **Auto-refreshed nightly by CI** now
+   (`.github/workflows/publish-site.yml` runs `deploy/site.sh` off-box at 04:00 UTC after the pull, S-04/D-53)
+   once the `DROPLET_HOST` + `DROPLET_SSH_KEY` repo secrets are set (B-4); until then, manual `./deploy/site.sh`.
+   S-B9: fill `fixtures/agent_b/golden.json` + `run_agent_b_eval.py`.
 
 - **Live activation gated (human/3rd-party):** B-4 (droplet SSH + DNS). B-9/B-10 creds are supplied. See [BLOCKERS.md](BLOCKERS.md).
 - **Live activation gated (human/3rd-party):** S-B7 live → B-9 (Slack app+tokens); S-B1 designs pull →

@@ -872,3 +872,30 @@ augmenting the retrieval query with history (dilutes good self-contained queries
 **Trade-off accepted:** one extra small read per message; memory is windowed to ~6 turns.
 **Revisit if:** conversations need summarization beyond a fixed window, or cross-conversation "what are
 we working on" memory is wanted (would need a longer-term store/summary).
+
+### D-53 · Nightly KB-site publish moves to a CI job (off-box), not a box cron  (2026-08-06, owner request)
+**Context:** The nightly Agent B pull ([deploy/agent_b_pull.cron](agent_b_pull.cron), 03:00) refreshes the
+vault, the RAG index, and the git history **on the box**, but the *published* Quartz site
+(`agent.<domain>`) is built by [deploy/site.sh](../deploy/site.sh) by hand from a laptop. So the public KB
+drifted stale relative to the freshly-pulled vault (and to the Slack bot, which already reads the live
+index) until someone re-ran `site.sh` manually.
+**Decision:** Add a scheduled GitHub Actions workflow ([.github/workflows/publish-site.yml](../.github/workflows/publish-site.yml))
+that runs the existing `deploy/site.sh` on the runner at **04:00 UTC** — one hour after the box's 03:00
+pull. It reuses the already-tested path verbatim: rsync the vault down from the box, `npx quartz build` on
+the runner, rsync the static site back to Caddy's web root, reload Caddy. Missing deploy secrets → the job
+no-ops with a `::warning::` (no nightly failure).
+**Why not a box cron:** the box has no Node and can't safely run the Quartz build (AD-21) — a build there
+would OOM or force Node onto the 1 GB memory envelope. The runner already has Node + the repo + off-box
+compute, so the CI job is the natural home; a box cron would still have to shell out to off-box compute.
+**Gate:** two repo Actions secrets — `DROPLET_HOST` + `DROPLET_SSH_KEY` (a deploy key trusted by the box).
+The same droplet-access gate as S-B5; recorded under BLOCKERS **B-4**.
+**Alternatives rejected:** (a) a box cron that ssh-triggers a build elsewhere — more moving parts, still
+needs off-box compute; (b) building the site inside the nightly pull container on the box — violates
+AD-21 (no Node, OOM risk); (c) leaving it manual — the drift is the problem being fixed.
+**Trade-off accepted:** the publish now depends on GitHub Actions availability and a box-scoped deploy key
+in repo secrets (rotatable). Timing is a fixed 04:00 UTC clock rather than event-chained off the pull's
+completion — simple, and the 1-hour gap is ample for the pull.
+**Revisit if:** the pull ever overruns the 1-hour gap (chain the publish off a pull-completion signal
+instead of a fixed clock), or the site needs per-commit freshness (trigger on vault git pushes).
+**No PRD/Spine change:** this honors AD-21 and completes S-B5's publish story; it adds no new product
+behavior or architectural boundary, so only this log + the deploy README + the Codebase Map are updated.

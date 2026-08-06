@@ -142,6 +142,16 @@ and live in [CHANGELOG.md](CHANGELOG.md). New agile stories use a flat `S-01, S-
 
 ---
 
+### S-04 · Automated nightly KB-site publish (CI)   [DONE (code); live run gated → B-4]
+**Intent:** the public Agent B KB site refreshes itself every night off the freshly-pulled vault, instead
+of drifting stale until someone runs `deploy/site.sh` by hand.
+**Acceptance criteria:**
+- [x] A scheduled workflow ([.github/workflows/publish-site.yml](../.github/workflows/publish-site.yml)) runs nightly (04:00 UTC, after the 03:00 box pull cron) and on manual dispatch; it executes the existing [deploy/site.sh](../deploy/site.sh) on the GitHub runner — rsync vault down → `npx quartz build` → rsync site up → reload Caddy.
+- [x] The Node/Quartz build never runs on the 1 GB box (AD-21); the box only serves the pre-built static files, read-only, no auth (D-45).
+- [x] Missing deploy secrets → the job **no-ops with a `::warning::`** (no nightly red X) rather than failing; the live run is gated on the `DROPLET_HOST` + `DROPLET_SSH_KEY` repo secrets (B-4).
+- [x] Docs synced: DECISION-LOG **D-53**, [deploy/README.md](../deploy/README.md), CLAUDE.md Codebase Map, BLOCKERS **B-4**; `make check` green (workflow + docs only — no app/test change).
+**Notes / pointers:** reuses `deploy/site.sh` + `deploy/build_site.sh` verbatim (which call `scripts/build_agent_b_site.py` — ensure that file is not deleted). Live run needs a deploy key trusted by the box in repo Actions secrets — the same droplet-access gate as S-B5 (B-4). **No PRD/Spine change:** this honors AD-21 + S-B5 and adds no new product behavior or boundary (D-53 records the why).
+
 ### S-01 · Activate the FR-17 inline-comment feedback channel live   [BLOCKED]
 **Intent:** a reviewer's Confluence **inline comment** on a draft actually triggers the flow in production
 (today it works in code + tests but nothing delivers the event live).
